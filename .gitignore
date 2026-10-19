@@ -1,0 +1,14 @@
+.venv/
+.uv-cache/
+.npm-cache/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+frontend/node_modules/
+frontend/dist/
+frontend/*.tsbuildinfo
+data/
+.artifacts/
+.tmp/
+*.log
