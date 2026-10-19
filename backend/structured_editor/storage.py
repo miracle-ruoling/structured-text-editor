@@ -15,7 +15,16 @@ from .docx.package import DocxPackage, open_zip
 from .docx.reader import project_document
 from .docx.sample import PROTECTED_TEXT, create_sample
 from .domain.commands import check_revision, commit, touch, travel
-from .domain.models import Annotation, AnnotationRequest, FormatPatch, FormatRequest, Project
+from .domain.models import (
+    Annotation,
+    AnnotationRequest,
+    DeleteSelectorRequest,
+    FormatPatch,
+    FormatRequest,
+    Project,
+    SavedSelector,
+    SaveSelectorRequest,
+)
 from .domain.selectors import select
 
 
@@ -131,6 +140,7 @@ class ProjectStore:
                     if (
                         existing.source_sha256 == project.source_sha256
                         and existing.annotations == project.annotations
+                        and existing.saved_selectors == project.saved_selectors
                         and existing.undo == project.undo
                         and existing.redo == project.redo
                     ):
@@ -180,6 +190,7 @@ class ProjectStore:
             "name": project.name,
             "revision": project.revision,
             "updated_at": project.updated_at,
+            "saved_selectors": [s.model_dump(exclude_none=True) for s in project.saved_selectors],
             "undo_label": project.undo[-1].label if project.undo else None,
             "redo_label": project.redo[-1].label if project.redo else None,
         }
@@ -222,9 +233,34 @@ class ProjectStore:
             annotation = annotations.setdefault(identity, Annotation())
             if request.role is not None:
                 annotation.role = request.role
+            elif request.reset_role:
+                annotation.role = None
             if request.tags is not None:
                 annotation.tags = request.tags
         if commit(project, annotations, f"标注 {len(set(request.ids))} 个段落"):
+            self.save(project)
+
+    def save_selector(self, project: Project, request: SaveSelectorRequest):
+        check_revision(project, request.revision)
+        item = SavedSelector(id=uuid.uuid4().hex, name=request.name, selector=request.selector)
+        if len(project.saved_selectors) >= 50:
+            raise ValueError("每个项目最多保存 50 个筛选")
+        if any(s.name.casefold() == item.name.casefold() for s in project.saved_selectors):
+            raise ValueError("已有同名筛选，请使用另一个名称")
+        if commit(project, project.annotations, f"保存筛选：{item.name}", [*project.saved_selectors, item]):
+            self.save(project)
+
+    def delete_selector(self, project: Project, request: DeleteSelectorRequest):
+        check_revision(project, request.revision)
+        item = next((s for s in project.saved_selectors if s.id == request.id), None)
+        if item is None:
+            raise ValueError("该筛选已经不存在，请刷新后重试")
+        if commit(
+            project,
+            project.annotations,
+            f"删除筛选：{item.name}",
+            [s for s in project.saved_selectors if s.id != item.id],
+        ):
             self.save(project)
 
     def history(self, project, revision, direction):

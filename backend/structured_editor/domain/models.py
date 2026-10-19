@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import re
+from copy import deepcopy
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from .expressions import parse_expression, references
 
 Role = Literal["body", "title", "heading", "caption", "quote", "code", "list", "reference", "unclassified"]
 ROLES = {
@@ -46,12 +50,22 @@ class FormatPatch(Model):
 
 
 class Condition(Model):
-    field: Literal["role", "tag", "context", "text"]
+    key: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,15}$")
+    field: Literal["role", "tag", "context", "text", "ids"]
     op: Literal["is", "is_not", "contains", "not_contains"] = "is"
-    value: str = Field(max_length=200)
+    value: str = Field(default="", max_length=200)
+    ids: list[str] | None = Field(default=None, max_length=20000)
 
     @model_validator(mode="after")
     def valid_condition(self):
+        if self.field == "ids":
+            if self.value or not self.ids or any(not re.fullmatch(r"p[1-9][0-9]*", i) for i in self.ids):
+                raise ValueError("框选条件需要非空的有效段落 ID 集合")
+            self.ids = list(dict.fromkeys(self.ids))
+        elif self.ids is not None:
+            raise ValueError("只有框选条件可以指定段落 ID")
+        elif not self.value.strip():
+            raise ValueError("请补全空白条件")
         if self.field == "role" and self.value not in ROLES:
             raise ValueError("未知类别")
         if self.field == "context" and self.value not in ("table", "outside_table"):
@@ -62,11 +76,24 @@ class Condition(Model):
 
 
 class Selector(Model):
-    mode: Literal["all", "any"] = "all"
+    mode: Literal["all", "any", "expression"] = "all"
     conditions: list[Condition | Selector] = Field(default_factory=list, max_length=30)
+    expression: str = Field(default="", max_length=2000)
 
     @model_validator(mode="after")
     def limit_tree(self):
+        keys = [c.key for c in self.conditions if isinstance(c, Condition) and c.key]
+        if len(keys) != len(set(keys)):
+            raise ValueError("条件代号不能重复")
+        if self.mode == "expression":
+            if any(not isinstance(c, Condition) or not c.key for c in self.conditions):
+                raise ValueError("高级表达式的每个条件都需要独立代号")
+            missing = references(parse_expression(self.expression)) - set(keys)
+            if missing:
+                raise ValueError("表达式引用了不存在的条件：" + "、".join("$" + k for k in sorted(missing)))
+        elif self.expression:
+            raise ValueError("简单模式不能携带高级表达式")
+
         def count(group, depth=0):
             if depth > 5:
                 raise ValueError("筛选分组最多嵌套 5 层")
@@ -93,21 +120,60 @@ class Annotation(Model):
         return result
 
 
+class SavedSelector(Model):
+    id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    name: str = Field(min_length=1, max_length=60)
+    selector: Selector
+
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value):
+        if not value.strip():
+            raise ValueError("请输入筛选名称")
+        return value.strip()
+
+    @field_validator("selector")
+    @classmethod
+    def editable_condition_list(cls, value):
+        if any(isinstance(item, Selector) for item in value.conditions):
+            raise ValueError("保存筛选时请用高级表达式表示嵌套关系")
+        return value
+
+
 class Snapshot(Model):
     label: str
     annotations: dict[str, Annotation]
+    saved_selectors: list[SavedSelector] = Field(default_factory=list, max_length=50)
 
 
 class Project(Model):
-    version: Literal[1] = 1
+    version: Literal[2] = 2
     id: str
     name: str
     source_sha256: str
     revision: int = 0
     annotations: dict[str, Annotation] = Field(default_factory=dict)
+    saved_selectors: list[SavedSelector] = Field(default_factory=list, max_length=50)
     undo: list[Snapshot] = Field(default_factory=list, max_length=50)
     redo: list[Snapshot] = Field(default_factory=list, max_length=50)
     updated_at: str = ""
+
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_v1(cls, value):
+        if isinstance(value, dict) and value.get("version", 1) == 1:
+            value = deepcopy(value)
+            value["version"] = 2
+        return value
+
+    @model_validator(mode="after")
+    def unique_selections(self):
+        for items in [self.saved_selectors, *[s.saved_selectors for s in self.undo + self.redo]]:
+            if len({s.id for s in items}) != len(items) or len({s.name.casefold() for s in items}) != len(
+                items
+            ):
+                raise ValueError("已保存筛选的名称和 ID 不能重复")
+        return self
 
 
 class FormatRequest(Model):
@@ -126,6 +192,7 @@ class AnnotationRequest(Model):
     revision: int
     ids: list[str] = Field(min_length=1, max_length=20000)
     role: Role | None = None
+    reset_role: bool = False
     tags: list[str] | None = Field(default=None, max_length=30)
 
     @field_validator("tags")
@@ -133,6 +200,21 @@ class AnnotationRequest(Model):
     def clean_tags(cls, value):
         return None if value is None else Annotation(tags=value).tags
 
+    @model_validator(mode="after")
+    def valid_role_change(self):
+        if self.reset_role and self.role is not None:
+            raise ValueError("恢复自动识别不能同时指定类别")
+        return self
+
 
 class RevisionRequest(Model):
     revision: int
+
+
+class SaveSelectorRequest(RevisionRequest):
+    name: str = Field(min_length=1, max_length=60)
+    selector: Selector
+
+
+class DeleteSelectorRequest(RevisionRequest):
+    id: str = Field(pattern=r"^[0-9a-f]{32}$")

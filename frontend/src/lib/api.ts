@@ -1,4 +1,4 @@
-import type { DocumentView, FormatPatch, Preview, RecentProject, Role, Selector } from './types';
+import type { AnnotationPatch, DocumentView, FormatPatch, Preview, RecentProject, Selector } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -28,7 +28,9 @@ export const api = {
   select: (id: string, selector: Selector) => request<{ ids: string[]; revision: number }>(`/projects/${id}/select`, selector),
   preview: (doc: DocumentView, selector: Selector, patch: FormatPatch) => request<Preview>(`/projects/${doc.id}/preview`, { revision: doc.revision, selector, patch }),
   apply: (doc: DocumentView, selector: Selector, patch: FormatPatch) => request<DocumentView>(`/projects/${doc.id}/apply`, { revision: doc.revision, selector, patch }),
-  annotate: (doc: DocumentView, id: string, patch: { role?: Role; tags?: string[] }) => request<DocumentView>(`/projects/${doc.id}/annotate`, { revision: doc.revision, ids: [id], ...patch }),
+  annotate: (doc: DocumentView, id: string, patch: AnnotationPatch) => request<DocumentView>(`/projects/${doc.id}/annotate`, { revision: doc.revision, ids: [id], ...patch }),
+  saveSelector: (doc: DocumentView, name: string, selector: Selector) => request<DocumentView>(`/projects/${doc.id}/selections/save`, { revision: doc.revision, name, selector }),
+  deleteSelector: (doc: DocumentView, id: string) => request<DocumentView>(`/projects/${doc.id}/selections/delete`, { revision: doc.revision, id }),
   history: (doc: DocumentView, direction: 'undo' | 'redo') => request<DocumentView>(`/projects/${doc.id}/${direction}`, { revision: doc.revision }),
   download: async (doc: DocumentView, kind: 'docx' | 'project') => {
     const response = await fetch(`/api/projects/${doc.id}/export/${kind}`);

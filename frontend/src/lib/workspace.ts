@@ -4,7 +4,8 @@ export type FormatTab = 'paragraph' | 'font';
 const fontKeys = new Set(['font_east_asia', 'font_latin', 'size_pt']);
 
 export function selectorComplete(selector: Selector): boolean {
-  return selector.conditions.every(c => c.value.trim().length > 0);
+  return (selector.mode !== 'expression' || !!selector.expression?.trim()) &&
+    selector.conditions.every(c => c.field === 'ids' ? !!c.ids?.length : c.value.trim().length > 0);
 }
 
 export function scopedPatch(patch: FormatPatch, tab: FormatTab, includeOther: boolean): FormatPatch {

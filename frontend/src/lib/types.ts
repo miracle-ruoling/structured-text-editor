@@ -21,10 +21,13 @@ export type Layout = { kind: 'paragraph'; id: string } | { kind: 'table'; rows: 
 export type DocumentView = {
   id: string; name: string; revision: number; updated_at: string;
   blocks: Block[]; layout: Layout[]; warnings: string[]; undo_label: string | null; redo_label: string | null;
+  saved_selectors: SavedSelector[];
 };
 export type RecentProject = { id: string; name: string; updated_at: string; revision: number };
-export type Condition = { field: 'role' | 'tag' | 'context' | 'text'; op: 'is' | 'is_not' | 'contains' | 'not_contains'; value: string };
-export type Selector = { mode: 'all' | 'any'; conditions: Condition[] };
+export type Condition = { key?: string; field: 'role' | 'tag' | 'context' | 'text' | 'ids'; op: 'is' | 'is_not' | 'contains' | 'not_contains'; value: string; ids?: string[] };
+export type Selector = { mode: 'all' | 'any' | 'expression'; conditions: Condition[]; expression?: string };
+export type SavedSelector = { id: string; name: string; selector: Selector };
+export type AnnotationPatch = { role?: Role; tags?: string[]; reset_role?: boolean };
 export type Preview = { revision: number; ids: string[]; changes: { id: string; text: string; before: Format; after: FormatPatch }[] };
 
 export const bodySelector: Selector = { mode: 'all', conditions: [

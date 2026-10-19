@@ -7,10 +7,11 @@ import { ObjectInspector } from './components/ObjectInspector';
 import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
-import type { DocumentView, FormatPatch, Preview, RecentProject, Role, Selector } from './lib/types';
+import type { AnnotationPatch, DocumentView, FormatPatch, Preview, RecentProject, Selector } from './lib/types';
 import { bodySelector } from './lib/types';
 import { afterApply, scopedPatch, selectorComplete } from './lib/workspace';
 import type { FormatTab } from './lib/workspace';
+import { nextKey, rangeCondition, withKeys } from './lib/selection';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
@@ -18,10 +19,14 @@ type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
 export default function App() {
   const [doc, setDoc] = useState<DocumentView | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
-  const [selector, setSelector] = useState<Selector>(structuredClone(bodySelector));
+  const [selector, setSelector] = useState<Selector>(() => withKeys(bodySelector));
   const [selectionActive, setSelectionActive] = useState(false);
   const [matched, setMatched] = useState<string[]>([]);
   const [matching, setMatching] = useState(false);
+  const [selectorError, setSelectorError] = useState<string | null>(null);
+  const [saveName, setSaveName] = useState('');
+  const [marking, setMarking] = useState(false);
+  const [marked, setMarked] = useState<string[]>([]);
   const [patch, setPatch] = useState<FormatPatch>({});
   const [formatTab, setFormatTab] = useState<FormatTab>('paragraph');
   const [includeOther, setIncludeOther] = useState(false);
@@ -38,7 +43,7 @@ export default function App() {
   const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const operationLock = useRef(false);
-  const hasDraft = !!Object.keys(patch).length || !!tagDraft.trim() || !!preview;
+  const hasDraft = !!Object.keys(patch).length || !!tagDraft.trim() || !!preview || !!saveName.trim();
 
   const acceptDoc = useCallback((value: DocumentView) => {
     setDoc(value); setPreview(null);
@@ -66,9 +71,10 @@ export default function App() {
   }, [acceptDoc]);
 
   useEffect(() => {
+    setSelectorError(null);
     if (!doc || !selectionActive || !selectorComplete(selector)) { setMatched([]); setMatching(false); return; }
     let active = true;
-    setMatching(true);
+    setMatching(true); setMatched([]);
     const timer = setTimeout(() => {
       api.select(doc.id, selector).then(async result => {
         if (!active) return;
@@ -77,7 +83,7 @@ export default function App() {
           if (active) acceptDoc(updated);
         } else setMatched(result.ids);
       }).catch(error => {
-        if (active) { setMatched([]); setMessage({ text: error.message, error: true }); }
+        if (active) { setMatched([]); setSelectorError(error.message); }
       }).finally(() => { if (active) setMatching(false); });
     }, 120);
     return () => { active = false; clearTimeout(timer); };
@@ -135,19 +141,20 @@ export default function App() {
   }, [history, preview, busy, pendingSwitch]);
 
   function changeSelector(value: Selector, explicitAll = false) {
-    setPreview(null); setMatched([]); setSelector(value); setTab('batch');
-    const active = explicitAll || value.conditions.length > 0;
+    setPreview(null); setMatched([]); setSelectorError(null); setSelector(withKeys(value)); setTab('batch');
+    const active = explicitAll || value.conditions.length > 0 || value.mode === 'expression';
     setSelectionActive(active); setMatching(active);
     if (!active) setOnlyMatches(false);
   }
   function exitSelection() {
-    setSelectionActive(false); setMatched([]); setMatching(false); setOnlyMatches(false); setPreview(null);
+    setSelectionActive(false); setMatched([]); setMatching(false); setSelectorError(null); setOnlyMatches(false); setPreview(null);
     if (current) setTab('object');
   }
   function newDocument(document: DocumentView) {
     acceptDoc(document); setCurrent(null); setTagDraft(''); setPatch({}); setLocked(false);
     setFormatTab('paragraph'); setIncludeOther(false); setTab('batch'); setOnlyMatches(false);
-    setSelectionActive(false); setMatched([]); setSelector(structuredClone(bodySelector));
+    setSelectionActive(false); setMatched([]); setSelector(withKeys(bodySelector));
+    setSaveName(''); setMarking(false); setMarked([]); setSelectorError(null);
   }
   function guardSwitch(action: () => void, objectOnly = false) {
     if (busy) return;
@@ -171,7 +178,7 @@ export default function App() {
       setMessage({ text: kind === 'docx' ? '已导出当前已保存状态的 Word 文件' : '已导出项目包副本，不会新增本地项目', error: false });
     });
   }
-  function annotate(id: string, annotation: { role?: Role; tags?: string[] }): Promise<boolean> {
+  function annotate(id: string, annotation: AnnotationPatch): Promise<boolean> {
     if (!doc) return Promise.resolve(false);
     return run(async () => {
       acceptDoc(await api.annotate(doc, id, annotation));
@@ -179,11 +186,35 @@ export default function App() {
     });
   }
   async function startPreview() {
-    if (!doc || !selectionActive || !selectorComplete(selector) || matching) return;
+    if (!doc || !selectionActive || !selectorComplete(selector) || matching || selectorError || !matched.length) return;
     const submitted = scopedPatch(patch, formatTab, includeOther);
     await run(async () => {
       const result = await api.preview(doc, selector, submitted);
       setPreview({ ...result, selector: structuredClone(selector), patch: { ...submitted } });
+    });
+  }
+
+  function addMarkedRange() {
+    if (busy || !marked.length) return;
+    const base: Selector = selectionActive ? selector : { mode: 'all', conditions: [] };
+    if (base.conditions.length >= 30) { setMessage({ text: '最多 30 个条件，请更新已有框选条件。', error: true }); return; }
+    const condition = rangeCondition(marked, nextKey(base));
+    changeSelector({ ...base, conditions: [...base.conditions, condition], expression: base.mode === 'expression' ? (base.expression?.trim() ? `(${base.expression}) AND $${condition.key}` : `$${condition.key}`) : '' });
+  }
+
+  async function saveCurrentSelector() {
+    if (!doc || busy || matching || selectorError || !selectionActive || !selectorComplete(selector) || !saveName.trim()) return;
+    await run(async () => {
+      acceptDoc(await api.saveSelector(doc, saveName.trim(), selector)); setSaveName('');
+      setMessage({ text: '筛选已保存到左侧，可撤销；没有应用格式', error: false });
+    });
+  }
+
+  function deleteSavedSelector(id: string) {
+    if (!doc) return;
+    void run(async () => {
+      acceptDoc(await api.deleteSelector(doc, id));
+      setMessage({ text: '已删除保存的筛选，可撤销', error: false });
     });
   }
   async function applyPreview() {
@@ -213,10 +244,14 @@ export default function App() {
       <Sidebar doc={doc} recent={recent}
         onOpen={id => guardSwitch(() => void run(async () => newDocument(await api.get(id))))}
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
+        onDeleteSelector={deleteSavedSelector}
         onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
       <DocumentCanvas doc={doc} matched={matched} current={tab === 'object' && !preview ? current : null} busy={busy}
         onPick={pickObject} preview={preview} patch={preview?.patch || {}} onExitPreview={() => setPreview(null)}
         showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={onlyMatches}
+        marking={marking} marked={marked} onMarking={() => setMarking(!marking)}
+        onMark={id => setMarked(ids => ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id])}
+        onClearMarks={() => setMarked([])} onAddRange={addMarkedRange}
         onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={selectionActive} />
       <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
@@ -225,19 +260,20 @@ export default function App() {
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length}
+            error={selectorError} marked={marked} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
             loading={matching} active={selectionActive} onExit={exitSelection} onResume={() => changeSelector(selector, true)} />
           <FormatPanel patch={patch} onChange={value => { setPreview(null); setPatch(value); }} preview={preview}
             onPreview={() => void startPreview()} onApply={() => void applyPreview()} onCancel={() => setPreview(null)}
-            busy={busy || matching || !selectionActive} count={matched.length} tab={formatTab}
+            busy={busy || matching || !selectionActive || !!selectorError} count={matched.length} tab={formatTab}
             onTab={value => { setFormatTab(value); setIncludeOther(false); setPreview(null); }}
             locked={locked} onLock={setLocked} includeOther={includeOther}
             onIncludeOther={value => { setIncludeOther(value); setPreview(null); }} />
-        </fieldset> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} />}</div>
+        </fieldset> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={id => changeSelector({ mode: 'all', conditions: [rangeCondition([id])] })} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">
       <div><span className="status-dot" /><span>本地运行</span><span className="status-divider" />{doc && <><span>{doc.blocks.length} 个段落</span><span className="status-divider" /><span>{!selectionActive ? '未筛选' : matching ? '正在匹配…' : `筛选匹配 ${matched.length} 段`}</span>{selectionActive && <button disabled={busy} onClick={exitSelection}>退出筛选</button>}</>}</div>
-      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 1 · 结构与格式</span></div>
+      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 2A · 选择范围</span></div>
     </footer>
     {pendingSwitch && <DraftDialog objectOnly={pendingSwitch.objectOnly} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
     {message && <div className={`toast ${message.error ? 'error' : ''}`} role={message.error ? 'alert' : 'status'}><span>{message.error ? '!' : <Check size={16} />}</span><p>{message.text}</p><button className="icon-button" onClick={() => setMessage(null)} aria-label="关闭提示"><X size={14} /></button></div>}

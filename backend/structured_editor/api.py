@@ -10,7 +10,14 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from .docx.package import MAX_UPLOAD
 from .docx.writer import export_docx
 from .domain.commands import ConflictError
-from .domain.models import AnnotationRequest, FormatRequest, RevisionRequest, Selector
+from .domain.models import (
+    AnnotationRequest,
+    DeleteSelectorRequest,
+    FormatRequest,
+    RevisionRequest,
+    SaveSelectorRequest,
+    Selector,
+)
 from .domain.selectors import select
 from .storage import ProjectStore
 
@@ -118,6 +125,20 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         with store.lock:
             project = store.load(identity)
             store.history(project, operation.revision, "redo")
+            return store.view(project)
+
+    @app.post("/api/projects/{identity}/selections/save")
+    def save_selection(identity: str, operation: SaveSelectorRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.save_selector(project, operation)
+            return store.view(project)
+
+    @app.post("/api/projects/{identity}/selections/delete")
+    def delete_selection(identity: str, operation: DeleteSelectorRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.delete_selector(project, operation)
             return store.view(project)
 
     def download(content: bytes, name: str, mime: str):
