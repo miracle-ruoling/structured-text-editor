@@ -1,0 +1,29 @@
+import { Plus, SlidersHorizontal, X } from 'lucide-react';
+import type { Condition, Selector } from '../lib/types';
+import { roles } from '../lib/types';
+
+type Props = { value: Selector; onChange: (value: Selector) => void; tags: string[]; count: number; loading: boolean };
+
+export function SelectorBuilder({ value, onChange, tags, count, loading }: Props) {
+  function update(index: number, patch: Partial<Condition>) {
+    onChange({ ...value, conditions: value.conditions.map((c, i) => i === index ? { ...c, ...patch } : c) });
+  }
+  function fieldChange(index: number, field: Condition['field']) {
+    update(index, { field, op: field === 'text' ? 'contains' : 'is', value: { role: 'body', tag: '保留原格式', context: 'table', text: '' }[field] });
+  }
+  return <section className="selector-section">
+    <div className="section-heading"><span><SlidersHorizontal size={15} />选择范围</span><span className="tiny-label">01</span></div>
+    <div className="logic-line">匹配<select aria-label="条件组合方式" value={value.mode} onChange={e => onChange({ ...value, mode: e.target.value as Selector['mode'] })}><option value="all">全部条件</option><option value="any">任一条件</option></select>的段落</div>
+    <div className="condition-list">
+      {value.conditions.map((condition, index) => <div className="condition-row" key={index}>
+        <select aria-label={`条件 ${index + 1} 字段`} value={condition.field} onChange={e => fieldChange(index, e.target.value as Condition['field'])}><option value="role">类别</option><option value="tag">标签</option><option value="context">位置</option><option value="text">内容</option></select>
+        <select aria-label={`条件 ${index + 1} 关系`} value={condition.op} onChange={e => update(index, { op: e.target.value as Condition['op'] })}>{condition.field === 'text' ? <><option value="contains">包含</option><option value="not_contains">不含</option></> : <><option value="is">是</option><option value="is_not">不是</option></>}</select>
+        {condition.field === 'role' ? <select aria-label={`条件 ${index + 1} 值`} value={condition.value} onChange={e => update(index, { value: e.target.value })}>{Object.entries(roles).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select> : condition.field === 'context' ? <select aria-label={`条件 ${index + 1} 值`} value={condition.value} onChange={e => update(index, { value: e.target.value })}><option value="table">表格内</option><option value="outside_table">表格外</option></select> : <input aria-label={`条件 ${index + 1} 值`} list={condition.field === 'tag' ? 'document-tags' : undefined} placeholder={condition.field === 'tag' ? '标签名称' : '输入文字'} value={condition.value} onChange={e => update(index, { value: e.target.value })} maxLength={200} />}
+        <button className="icon-button remove-condition" aria-label={`删除条件 ${index + 1}`} onClick={() => onChange({ ...value, conditions: value.conditions.filter((_, i) => i !== index) })}><X size={13} /></button>
+      </div>)}
+    </div>
+    <datalist id="document-tags">{tags.map(tag => <option key={tag} value={tag} />)}</datalist>
+    <button className="text-button add-condition" disabled={value.conditions.length >= 30} onClick={() => onChange({ ...value, conditions: [...value.conditions, { field: 'tag', op: 'is_not', value: '' }] })}><Plus size={14} />添加条件</button>
+    <div className="match-summary"><span className="status-dot" /><span>{loading ? '正在匹配…' : <>已选中 <strong>{count}</strong> 个段落</>}</span><span>实时高亮</span></div>
+  </section>;
+}
