@@ -13,6 +13,11 @@ def read_properties(node, paragraph=False) -> dict:
             result["alignment"] = alignment
         ind = node.find(q("ind"))
         if ind is not None:
+            for side in ("left", "right"):
+                if ind.get(q(side + "Chars")) is not None:
+                    result[f"{side}_indent_chars"] = int(ind.get(q(side + "Chars"))) / 100
+                elif ind.get(q(side)) is not None:
+                    result[f"{side}_indent_pt"] = int(ind.get(q(side))) / 20
             if ind.get(q("firstLineChars")) is not None:
                 result["first_line_chars"] = int(ind.get(q("firstLineChars"))) / 100
             elif ind.get(q("hangingChars")) is not None:
@@ -93,6 +98,11 @@ class StyleResolver:
                 fmt.pop("line_spacing_pt", None)
             if "line_spacing_pt" in data:
                 fmt.pop("line_spacing", None)
+            for side in ("left", "right"):
+                if f"{side}_indent_chars" in data:
+                    fmt.pop(f"{side}_indent_pt", None)
+                if f"{side}_indent_pt" in data:
+                    fmt.pop(f"{side}_indent_chars", None)
             fmt.update(data)
             sources.update({key: source for key in data})
 

@@ -2,7 +2,7 @@ import { BookOpen, Braces, FileText, Hash, Layers3, ShieldCheck, Sparkles, Table
 import type { DocumentView, RecentProject, Selector } from '../lib/types';
 import { bodySelector, roles } from '../lib/types';
 
-type Props = { doc: DocumentView; recent: RecentProject[]; onOpen: (id: string) => void; selector: Selector; onSelect: (selector: Selector) => void; onDemo: () => void; disabled: boolean };
+type Props = { doc: DocumentView; recent: RecentProject[]; onOpen: (id: string) => void; selector: Selector | null; onSelect: (selector: Selector) => void; onDemo: () => void; disabled: boolean };
 const presets = [
   { name: '全部内容', icon: Layers3, selector: { mode: 'all', conditions: [] } as Selector },
   { name: '正文 · 排除例外', icon: FileText, selector: bodySelector },
@@ -15,7 +15,7 @@ export function Sidebar({ doc, recent, onOpen, selector, onSelect, onDemo, disab
   return <aside className="sidebar">
     <div className="sidebar-label">当前文档</div>
     <div className="file-card"><div className="file-icon"><FileText size={19} /></div><div><strong title={doc.name}>{doc.name.replace(/\.docx$/i, '')}</strong><span>DOCX · {doc.blocks.length} 个段落</span></div></div>
-    <select className="recent-projects" aria-label="打开最近文档" disabled={disabled} value="" onChange={e => { if (e.target.value) onOpen(e.target.value); }}><option value="">打开最近文档…</option>{recent.filter(p => p.id !== doc.id).map(project => <option key={project.id} value={project.id}>{project.name} · {new Date(project.updated_at).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</option>)}</select>
+    <select className="recent-projects" aria-label="打开最近文档" disabled={disabled} value="" onChange={e => { if (e.target.value) onOpen(e.target.value); }}><option value="">打开最近文档…</option>{recent.filter(p => p.id !== doc.id).map(project => <option key={project.id} value={project.id}>{project.name} · {new Date(project.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · r{project.revision} · {project.id.slice(0, 6)}</option>)}</select>
     <div className="sidebar-label spaced">快捷选择 <span>SELECT</span></div>
     <nav className="preset-list" aria-label="快捷选择器">
       {presets.map(({ name, icon: Icon, selector: value }) => <button disabled={disabled} key={name} className={`nav-item ${JSON.stringify(selector) === JSON.stringify(value) ? 'active' : ''}`} onClick={() => onSelect(structuredClone(value))}><Icon size={17} /><span>{name}</span>{JSON.stringify(selector) === JSON.stringify(value) && <i />}</button>)}

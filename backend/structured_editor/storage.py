@@ -57,10 +57,35 @@ class ProjectStore:
                 continue
             try:
                 project = self.load(folder.name)
-                projects.append({"id": project.id, "name": project.name, "updated_at": project.updated_at})
+                projects.append(
+                    {
+                        "id": project.id,
+                        "name": project.name,
+                        "updated_at": project.updated_at,
+                        "revision": project.revision,
+                    }
+                )
             except (OSError, ValueError):
                 continue
         return sorted(projects, key=lambda p: p["updated_at"], reverse=True)[:30]
+
+    def existing_projects(self):
+        for folder in self.root.iterdir():
+            if folder.is_dir() and re.fullmatch(r"[0-9a-f]{32}", folder.name):
+                try:
+                    yield self.load(folder.name)
+                except (OSError, ValueError):
+                    continue
+
+    def unique_name(self, name: str) -> str:
+        names = {p.name for p in self.existing_projects()}
+        if name not in names:
+            return name
+        path = Path(name)
+        number = 2
+        while f"{path.stem} · 项目 {number}{path.suffix}" in names:
+            number += 1
+        return f"{path.stem} · 项目 {number}{path.suffix}"
 
     @lru_cache(maxsize=8)
     def original_view(self, identity):
@@ -74,7 +99,7 @@ class ProjectStore:
         identity = uuid.uuid4().hex
         checksum = hashlib.sha256(source).hexdigest()
         if project is None:
-            project = Project(id=identity, name=name, source_sha256=checksum)
+            project = Project(id=identity, name=self.unique_name(name), source_sha256=checksum)
         else:
             if project.source_sha256 != checksum:
                 raise ValueError("项目中的原文件校验失败。")
@@ -83,6 +108,7 @@ class ProjectStore:
                 if not annotations.keys() <= permitted:
                     raise ValueError("项目包含无效或不支持修改的段落。")
             project.id = identity
+            project.name = self.unique_name(project.name)
         touch(project)
         folder = self.folder(identity)
         folder.mkdir()
@@ -97,9 +123,25 @@ class ProjectStore:
                 if "project.json" not in archive.namelist() or "source.docx" not in archive.namelist():
                     raise ValueError("项目包缺少原文件或项目信息。")
                 project = Project.model_validate_json(archive.read("project.json"))
-                return self.create(archive.read("source.docx"), name, project)
+                source = archive.read("source.docx")
+                if hashlib.sha256(source).hexdigest() != project.source_sha256:
+                    raise ValueError("项目中的原文件校验失败。")
+                # Reopening a portable snapshot must not create an identical local project.
+                for existing in self.existing_projects():
+                    if (
+                        existing.source_sha256 == project.source_sha256
+                        and existing.annotations == project.annotations
+                        and existing.undo == project.undo
+                        and existing.redo == project.redo
+                    ):
+                        return existing
+                return self.create(source, name, project)
         if not name.lower().endswith(".docx"):
             raise ValueError("请选择 .docx 文件或 .sdoc 文序项目。")
+        checksum = hashlib.sha256(data).hexdigest()
+        matches = [p for p in self.existing_projects() if p.source_sha256 == checksum]
+        if matches:
+            return max(matches, key=lambda p: p.updated_at)
         return self.create(data, name)
 
     def demo(self) -> Project:

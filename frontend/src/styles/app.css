@@ -93,7 +93,8 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .document-block:hover { background: #f9fbf9; }
 .document-block.matched { background: #f4f9f5; }
 .document-block.matched::before { content: ''; position: absolute; left: -1px; top: 9px; bottom: 8px; width: 2px; border-radius: 2px; background: #a1c3ac; }
-.document-block.focused { border-color: #94b6a1; background: #eff6f0; }
+.document-block.focused { border-color: #a598c4; background: #f5f1fa; box-shadow: 0 0 0 1px #d4c9e74f; }
+.document-block.focused::after { content: '正在查看'; position: absolute; right: 7px; top: 6px; font: 9px "Microsoft YaHei", sans-serif; color: #927baa; background: #f5f1fa; padding: 2px 5px; border-radius: 3px; }
 .document-block.pending { background: #f2f7fb; border-color: #c8dce5; }
 .document-block.pending::before { background: #89b2c5; }
 .block-index { font: 9px "Segoe UI", sans-serif; color: #bdc6bf; position: absolute; left: -25px; top: 12px; font-variant-numeric: tabular-nums; }
@@ -109,6 +110,41 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .locked-badge { display: inline-flex; gap: 3px; align-items: center; color: #a69a85; font-size: 9px; }
 .pending-label { font-size: 9px; color: #779bb4; margin-left: auto; }
 .paragraph-text { padding: 0; margin: 0; font-family: "宋体", "SimSun", serif; font-size: 12pt; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; color: #35453c; }
+.paragraph-text { min-width: 0; max-width: 100%; }
+.paragraph-comparison { display: grid; gap: 7px; min-width: 0; }
+.comparison-before, .comparison-after { padding: 10px 12px; border: 1px solid; border-radius: 5px; min-width: 0; }
+.comparison-before { background: #f2f8f1; border-color: #d6e5d2; }
+.comparison-after { background: #edf5fb; border-color: #c9dfed; }
+.comparison-label { display: block; font: 10px "Microsoft YaHei", sans-serif; color: #799472; margin-bottom: 10px; }
+.comparison-after .comparison-label { color: #688fa9; }
+.document-block.pending { background: transparent; border-color: transparent; }
+.document-block.pending::before { display: none; }
+/* Keep paragraph numbers and focus outlines outside paint containment. */
+.document-paper > .document-block > .block-content, .document-paper > .document-table { content-visibility: auto; contain-intrinsic-size: auto 110px; }
+.preview-banner { flex-wrap: wrap; }
+.preview-banner .secondary { margin-left: auto; height: 30px; font-size: 11px; border-color: #c5d9e5; background: #fff; color: #5e859c; }
+.choice-input { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.choice-input select, .choice-input input { width: 100%; }
+.condition-row { align-items: start; }
+.remove-condition { margin-top: 3px; }
+.selection-idle { padding: 12px; border: 1px dashed #dce5de; background: #f9fbf9; border-radius: 6px; margin: 0 0 15px; color: #8a9c8c; }
+.selection-idle strong { font-size: 12px; }
+.selection-idle p { font-size: 10px; line-height: 1.9; }
+.selection-idle button { font-size: 11px; height: 31px; }
+.match-summary.inactive { background: #f7f8f7; color: #98a19a; }
+.match-summary.inactive .status-dot { background: #b2bcb4; }
+.check-option { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #819387; margin-top: 12px; cursor: pointer; }
+.check-option input { width: 13px; height: 13px; flex: 0 0 13px; margin: 0; accent-color: var(--green); }
+.scope-option { margin-top: 20px; }
+.scope-note { font-size: 10px; color: #6b8d78; line-height: 1.8; margin-bottom: 0; }
+.autosave-note { display: flex; gap: 5px; align-items: flex-start; color: #9aa99f; font-size: 10px; line-height: 1.9; margin-top: 19px; }
+.autosave-note svg { margin-top: 3px; }
+.operation-footer .cancel-preview { height: 37px; font-size: 12px; border-color: #bed2c8; color: #507a65; }
+.draft-dialog { max-width: 430px; width: calc(100vw - 40px); border: 1px solid #dce5de; border-radius: 12px; padding: 24px; color: #526959; box-shadow: 0 15px 55px #18332438; }
+.draft-dialog::backdrop { background: #17332938; backdrop-filter: blur(2px); }
+.draft-dialog h2 { font-size: 17px; font-weight: 600; margin: 0 0 14px; }
+.draft-dialog p { font-size: 12px; line-height: 1.9; color: #87988a; margin-bottom: 22px; }
+.draft-dialog > div { display: flex; justify-content: flex-end; gap: 9px; }
 .empty-paragraph { font-size: 11px; color: #a9b2aa; font-family: "Segoe UI", sans-serif; }
 .document-block.code { background: #f7f8f7; }
 .feature-placeholder { font-size: 11px; color: #96a59a; border: 1px dashed #d6e0d8; padding: 14px; border-radius: 4px; margin: 7px 0; display: flex; gap: 6px; align-items: center; }

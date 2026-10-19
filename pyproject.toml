@@ -22,7 +22,7 @@ packages = ["backend/structured_editor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--basetemp=.artifacts/pytest"
+cache_dir = ".artifacts/pytest-cache-local"
 
 [tool.ruff]
 target-version = "py313"

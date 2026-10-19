@@ -60,7 +60,7 @@ def test_manual_annotations_filter_undo_and_portable_project_roundtrip(client):
     assert persisted.load(doc["id"]).annotations["p3"].role == "quote"
     bundle = client.get(base + "/export/project")
     imported = client.post("/api/projects/import", files={"file": ("再次打开.sdoc", bundle.content)}).json()
-    assert imported["id"] != doc["id"]
+    assert imported["id"] == doc["id"], "重新打开相同快照应复用本地项目"
     assert imported["blocks"] == updated["blocks"]
     assert imported["undo_label"] == updated["undo_label"]
     undone = client.post(

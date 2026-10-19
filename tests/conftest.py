@@ -1,5 +1,6 @@
 import io
 import zipfile
+from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
@@ -11,7 +12,10 @@ from structured_editor.docx.xml import W, q
 
 
 def pytest_configure(config):
-    (config.rootpath / ".artifacts").mkdir(exist_ok=True)
+    runs = config.rootpath / ".artifacts" / "test-runs"
+    runs.mkdir(parents=True, exist_ok=True)
+    if config.option.basetemp is None:
+        config.option.basetemp = str(runs / uuid4().hex)
 
 
 @pytest.fixture
