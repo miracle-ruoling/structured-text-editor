@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { nextKey, rangeCondition, selectorSignature, toggleExpression, withKeys } from '../src/lib/selection.ts';
+import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition, selectorSignature, toggleExpression, withKeys } from '../src/lib/selection.ts';
 import { selectorComplete } from '../src/lib/workspace.ts';
 import type { Selector } from '../src/lib/types.ts';
 
@@ -32,4 +32,41 @@ test('切回简单模式显式清空表达式；简单预设比较不受代号�
   assert.equal(selectorSignature(simple), selectorSignature(returned));
   assert.equal(selectorSignature(simple), selectorSignature({ mode: 'all', expression: '', conditions: [{ value: 'body', key: 'B', op: 'is', field: 'role' }] }));
   assert.equal(selectorComplete({ ...advanced, expression: '' }), false);
+});
+
+test('首次进入无历史；退出清空当前范围，同时保留独立的恢复快照', () => {
+  const initial = emptySelectionSession();
+  assert.equal(initial.active, false);
+  assert.equal(initial.previous, null);
+  const active = activateSelection(initial, { mode: 'all', conditions: [rangeCondition(['p3', 'p5'])] });
+  const idle = leaveSelection(active);
+  assert.equal(idle.active, false);
+  assert.deepEqual(idle.selector, { mode: 'all', conditions: [] });
+  assert.deepEqual(idle.previous, active.selector);
+  active.selector.conditions[0].ids!.push('p7');
+  const resumed = activateSelection(idle, idle.previous!, true);
+  assert.equal(resumed.active, true);
+  assert.deepEqual(resumed.selector.conditions[0].ids, ['p3', 'p5']);
+  assert.deepEqual(leaveSelection(idle).previous, idle.previous);
+});
+
+test('删除最后一个简单条件进入空闲，显式全选仍可退出并恢复', () => {
+  const active = activateSelection(emptySelectionSession(), { mode: 'all', conditions: [rangeCondition(['p3'])] });
+  const cleared = activateSelection(active, { mode: 'all', conditions: [] });
+  assert.equal(cleared.active, false);
+  assert.deepEqual(cleared.previous, active.selector);
+  const all = activateSelection(cleared, { mode: 'all', conditions: [] }, true);
+  const idle = leaveSelection(all);
+  assert.equal(idle.previous?.conditions.length, 0);
+  assert.equal(activateSelection(idle, idle.previous!, true).active, true);
+  assert.equal(emptySelectionSession().previous, null, '切换文档不带入恢复范围');
+});
+
+test('高级模式删完条件保持失效表达式可修正，不能落入空 AND 全选', () => {
+  const active = activateSelection(emptySelectionSession(), toggleExpression({ mode: 'all', conditions: [rangeCondition(['p3'])] }));
+  const dangling = activateSelection(active, { ...active.selector, conditions: [] });
+  assert.equal(dangling.active, true);
+  assert.equal(dangling.selector.mode, 'expression');
+  assert.equal(dangling.selector.expression, '$A');
+  assert.equal(leaveSelection(dangling).active, false);
 });

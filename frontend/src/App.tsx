@@ -8,10 +8,9 @@ import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
 import type { AnnotationPatch, DocumentView, FormatPatch, Preview, RecentProject, Selector } from './lib/types';
-import { bodySelector } from './lib/types';
 import { afterApply, scopedPatch, selectorComplete } from './lib/workspace';
 import type { FormatTab } from './lib/workspace';
-import { nextKey, rangeCondition, withKeys } from './lib/selection';
+import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition } from './lib/selection';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
@@ -19,8 +18,8 @@ type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
 export default function App() {
   const [doc, setDoc] = useState<DocumentView | null>(null);
   const [recent, setRecent] = useState<RecentProject[]>([]);
-  const [selector, setSelector] = useState<Selector>(() => withKeys(bodySelector));
-  const [selectionActive, setSelectionActive] = useState(false);
+  const [selectionSession, setSelectionSession] = useState(emptySelectionSession);
+  const { selector, active: selectionActive, previous: previousSelector } = selectionSession;
   const [matched, setMatched] = useState<string[]>([]);
   const [matching, setMatching] = useState(false);
   const [selectorError, setSelectorError] = useState<string | null>(null);
@@ -141,19 +140,19 @@ export default function App() {
   }, [history, preview, busy, pendingSwitch]);
 
   function changeSelector(value: Selector, explicitAll = false) {
-    setPreview(null); setMatched([]); setSelectorError(null); setSelector(withKeys(value)); setTab('batch');
-    const active = explicitAll || value.conditions.length > 0 || value.mode === 'expression';
-    setSelectionActive(active); setMatching(active);
-    if (!active) setOnlyMatches(false);
+    const next = activateSelection(selectionSession, value, explicitAll);
+    setPreview(null); setMatched([]); setSelectorError(null); setSelectionSession(next); setTab('batch');
+    setMatching(next.active);
+    if (!next.active) setOnlyMatches(false);
   }
   function exitSelection() {
-    setSelectionActive(false); setMatched([]); setMatching(false); setSelectorError(null); setOnlyMatches(false); setPreview(null);
-    if (current) setTab('object');
+    setSelectionSession(leaveSelection(selectionSession)); setMatched([]); setMatching(false);
+    setSelectorError(null); setOnlyMatches(false); setPreview(null);
   }
   function newDocument(document: DocumentView) {
     acceptDoc(document); setCurrent(null); setTagDraft(''); setPatch({}); setLocked(false);
     setFormatTab('paragraph'); setIncludeOther(false); setTab('batch'); setOnlyMatches(false);
-    setSelectionActive(false); setMatched([]); setSelector(withKeys(bodySelector));
+    setSelectionSession(emptySelectionSession()); setMatched([]);
     setSaveName(''); setMarking(false); setMarked([]); setSelectorError(null);
   }
   function guardSwitch(action: () => void, objectOnly = false) {
@@ -197,7 +196,7 @@ export default function App() {
   function addMarkedRange() {
     if (busy || !marked.length) return;
     const base: Selector = selectionActive ? selector : { mode: 'all', conditions: [] };
-    if (base.conditions.length >= 30) { setMessage({ text: '最多 30 个条件，请更新已有框选条件。', error: true }); return; }
+    if (base.conditions.length >= 30) { setMessage({ text: '最多 30 个条件，请先删除不需要的条件再添加。', error: true }); return; }
     const condition = rangeCondition(marked, nextKey(base));
     changeSelector({ ...base, conditions: [...base.conditions, condition], expression: base.mode === 'expression' ? (base.expression?.trim() ? `(${base.expression}) AND $${condition.key}` : `$${condition.key}`) : '' });
   }
@@ -261,7 +260,9 @@ export default function App() {
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length}
             error={selectorError} marked={marked} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
-            loading={matching} active={selectionActive} onExit={exitSelection} onResume={() => changeSelector(selector, true)} />
+            loading={matching} active={selectionActive} onExit={exitSelection} canResume={previousSelector !== null}
+            onResume={() => { if (previousSelector) changeSelector(previousSelector, true); }}
+            onStart={() => changeSelector({ mode: 'all', conditions: [{ field: 'role', op: 'is', value: 'body' }] })} />
           <FormatPanel patch={patch} onChange={value => { setPreview(null); setPatch(value); }} preview={preview}
             onPreview={() => void startPreview()} onApply={() => void applyPreview()} onCancel={() => setPreview(null)}
             busy={busy || matching || !selectionActive || !!selectorError} count={matched.length} tab={formatTab}

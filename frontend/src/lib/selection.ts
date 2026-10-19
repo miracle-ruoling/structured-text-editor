@@ -1,5 +1,23 @@
 import type { Condition, Selector } from './types.ts';
 
+export type SelectionSession = { selector: Selector; active: boolean; previous: Selector | null };
+
+export function emptySelectionSession(): SelectionSession {
+  return { selector: { mode: 'all', conditions: [] }, active: false, previous: null };
+}
+
+export function leaveSelection(session: SelectionSession): SelectionSession {
+  return {
+    ...emptySelectionSession(),
+    previous: structuredClone(session.active ? session.selector : session.previous),
+  };
+}
+
+export function activateSelection(session: SelectionSession, selector: Selector, explicitAll = false): SelectionSession {
+  if (!explicitAll && selector.mode !== 'expression' && !selector.conditions.length) return leaveSelection(session);
+  return { ...session, selector: withKeys(selector), active: true };
+}
+
 function letterKey(number: number): string {
   let result = '';
   do { result = String.fromCharCode(65 + number % 26) + result; number = Math.floor(number / 26) - 1; } while (number >= 0);
