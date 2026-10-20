@@ -21,7 +21,7 @@ function typography(format: Format): CSSProperties {
   return {
     fontSize: format.size_pt ? `${format.size_pt}pt` : undefined,
     fontFamily: fonts.length ? [...fonts, 'serif'].join(',') : undefined,
-    fontWeight: format.bold ? 700 : undefined, fontStyle: format.italic ? 'italic' : undefined,
+    fontWeight: format.bold == null ? undefined : format.bold ? 700 : 400, fontStyle: format.italic == null ? undefined : format.italic ? 'italic' : 'normal',
     color: format.color || undefined,
   };
 }
@@ -72,7 +72,7 @@ export function DocumentCanvas({ doc, matched, current, onPick, preview, patch, 
   }
   return <main className="canvas-area">
     <div className="canvas-heading"><div className="breadcrumb"><span>文档空间</span><span>/</span><strong>{doc.name}</strong></div><span className="view-mode"><span className="status-dot" />本地工作区</span></div>
-    <div className="canvas-toolbar"><div><span className="active-view"><FileSearch size={15} />结构视图</span><span className="view-description">让每次修改都有明确的范围</span></div><div className="view-actions"><button aria-pressed={marking} title="手动框选段落，显式加入筛选条件" disabled={busy} onClick={onMarking}><MousePointer2 size={14} /><span>框选</span></button><button aria-pressed={showTags} title="显示或隐藏类别与标签" onClick={onShowTags}><Tag size={14} /><span>标记</span></button><button aria-pressed={onlyMatches} title="只显示匹配的段落" disabled={!selectionActive || !!preview?.after_blocks} onClick={onOnlyMatches}><PanelLeftClose size={14} /><span>仅匹配</span></button><select aria-label="文档缩放" value={zoom} onChange={e => onZoom(Number(e.target.value))}>{[80, 90, 100, 110, 125].map(value => <option key={value} value={value}>{value}%</option>)}</select></div></div>
+    <div className="canvas-toolbar"><div><span className="active-view"><FileSearch size={15} />结构视图</span><span className="view-description">让每次修改都有明确的范围</span></div><div className="view-actions"><button aria-pressed={marking} title="手动框选段落，显式加入筛选条件" disabled={busy} onClick={onMarking}><MousePointer2 size={14} /><span>框选</span></button><button aria-pressed={showTags} title="显示或隐藏类别与标签" onClick={onShowTags}><Tag size={14} /><span>标记</span></button><button aria-pressed={onlyMatches} title="只显示匹配的段落" disabled={!selectionActive} onClick={onOnlyMatches}><PanelLeftClose size={14} /><span>仅匹配</span></button><select aria-label="文档缩放" value={zoom} onChange={e => onZoom(Number(e.target.value))}>{[80, 90, 100, 110, 125].map(value => <option key={value} value={value}>{value}%</option>)}</select></div></div>
     {marking && <div className="marking-banner"><span><strong>框选 {marked.length} 段</strong> · 加入条件后才参与格式操作</span><button className="secondary" disabled={busy || !marked.length} onClick={onAddRange}>加入筛选条件</button><button className="text-button" disabled={busy || !marked.length} onClick={onClearMarks}>清空框选</button></div>}
     {preview && <div className="preview-banner"><Eye size={16} /><span><strong>正在预览</strong> · {preview.ids.length} 个段落的上下对比，尚未应用</span><button className="secondary" disabled={busy} onClick={onExitPreview}>退出预览 · Esc</button></div>}
     <div className="canvas-scroll">

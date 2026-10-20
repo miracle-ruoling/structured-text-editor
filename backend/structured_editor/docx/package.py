@@ -1,4 +1,5 @@
 import io
+import posixpath
 import zipfile
 
 from lxml import etree
@@ -38,6 +39,9 @@ class DocxPackage:
         try:
             self.document = parse(self.archive.read("word/document.xml"))
             self.styles = parse(self.archive.read("word/styles.xml")) if "word/styles.xml" in names else None
+            self.theme = self.related_xml("theme")
+            self.settings = self.related_xml("settings")
+            self.numbering = self.related_xml("numbering")
         except (etree.XMLSyntaxError, zipfile.BadZipFile) as exc:
             raise ValueError("Word 文件的 XML 内容损坏，无法读取。") from exc
         self.body = self.document.find(q("body"))
@@ -48,6 +52,22 @@ class DocxPackage:
             raise ValueError("当前最多支持 20,000 个段落。")
         self.by_id = {f"p{index + 1}": paragraph for index, paragraph in enumerate(self.paragraphs)}
         self.ids = {paragraph: identity for identity, paragraph in self.by_id.items()}
+
+    def related_xml(self, kind: str):
+        path = "word/_rels/document.xml.rels"
+        if path not in self.archive.namelist():
+            return None
+        relations = parse(self.archive.read(path))
+        for relation in relations:
+            if relation.get("Type", "").endswith("/" + kind) and relation.get("TargetMode") != "External":
+                target = relation.get("Target", "")
+                if not target or ":" in target or "\\" in target:
+                    continue
+                path = posixpath.normpath(target.lstrip("/") if target.startswith("/") else "word/" + target)
+                if path.startswith("../") or path not in self.archive.namelist():
+                    continue
+                return parse(self.archive.read(path))
+        return None
 
     def replace_document(self) -> bytes:
         xml = etree.tostring(self.document, encoding="UTF-8", xml_declaration=True, standalone=True)

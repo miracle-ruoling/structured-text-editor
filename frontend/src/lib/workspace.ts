@@ -1,7 +1,16 @@
-import type { Format, FormatPatch, Selector } from './types.ts';
+import type { Format, FormatPatch, Selector, SizeChange } from './types.ts';
 
 export type FormatTab = 'paragraph' | 'font';
-const fontKeys = new Set(['font_east_asia', 'font_latin', 'size_pt']);
+const fontKeys = new Set(['font_east_asia', 'font_latin', 'size_pt', 'bold', 'italic']);
+
+export function scopedSizeChange(change: SizeChange | null, tab: FormatTab, includeOther: boolean) {
+  return tab === 'font' || includeOther ? change : null;
+}
+
+export function validSizeChange(change: SizeChange | null) {
+  return !change || (Number.isFinite(change.amount) && change.amount !== 0 && Math.abs(change.amount) <= (change.mode === 'chinese_steps' ? 15 : 100) &&
+    (change.mode === 'chinese_steps' ? Number.isInteger(change.amount) : Number.isInteger(change.amount * 2)));
+}
 
 export function selectorComplete(selector: Selector): boolean {
   return (selector.mode !== 'expression' || !!selector.expression?.trim()) &&
@@ -14,6 +23,10 @@ export function scopedPatch(patch: FormatPatch, tab: FormatTab, includeOther: bo
 
 export function afterApply(patch: FormatPatch, locked: boolean): FormatPatch {
   return locked ? { ...patch } : {};
+}
+
+export function afterSizeApply(change: SizeChange | null, locked: boolean): SizeChange | null {
+  return locked && change ? { ...change } : null;
 }
 
 // Screen-only geometry. Preserve source values in the model and export;

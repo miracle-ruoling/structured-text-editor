@@ -11,9 +11,11 @@ from functools import lru_cache
 from pathlib import Path
 from threading import RLock
 
+from .docx.audit import audit_export
 from .docx.package import DocxPackage, open_zip
 from .docx.reader import project_document
 from .docx.sample import PROTECTED_TEXT, create_sample
+from .docx.writer import export_docx
 from .domain.commands import check_revision, commit, touch, travel
 from .domain.models import (
     Annotation,
@@ -30,6 +32,7 @@ from .domain.models import (
 )
 from .domain.rules import changed_rules, resolve
 from .domain.selectors import select
+from .domain.sizes import changed_sizes, size_values
 
 
 def atomic_write(path: Path, data: bytes):
@@ -117,9 +120,13 @@ class ProjectStore:
             if project.source_sha256 != checksum:
                 raise ValueError("项目中的原文件校验失败。")
             permitted = {b["id"] for b in base["blocks"] if b["editable"]}
+            run_ids = {b["id"]: {str(r["index"]) for r in b["runs"]} for b in base["blocks"]}
             for annotations in [project.annotations, *[s.annotations for s in project.undo + project.redo]]:
                 if not annotations.keys() <= permitted:
                     raise ValueError("项目包含无效或不支持修改的段落。")
+                for paragraph_id, annotation in annotations.items():
+                    if annotation.sizes and not annotation.sizes.runs.keys() <= run_ids[paragraph_id]:
+                        raise ValueError("项目包含无效的逐文字字号定位。")
             project.id = identity
             project.name = self.unique_name(project.name)
         touch(project)
@@ -182,32 +189,54 @@ class ProjectStore:
             "redo_label": project.redo[-1].label if project.redo else None,
         }
 
-    def preview(self, project: Project, request: FormatRequest) -> dict:
+    def prepare_format(self, project: Project, request: FormatRequest):
         check_revision(project, request.revision)
-        view = self.view(project)
-        ids = select(view["blocks"], request.selector)
+        before = self.view(project)
+        ids = select(before["blocks"], request.selector)
         selected = set(ids)
-        patch = request.patch.values()
-        changes = []
-        for block in view["blocks"]:
-            if block["id"] in selected:
+        annotations = deepcopy(project.annotations)
+        for block in before["blocks"]:
+            if block["id"] not in selected:
+                continue
+            annotation = annotations.setdefault(block["id"], Annotation())
+            values = annotation.format.values() | request.patch.values()
+            if request.size_change:
+                annotation.sizes = changed_sizes(block, request.size_change)
+                values.pop("size_pt", None)
+            elif request.patch.size_pt is not None:
+                annotation.sizes = None
+            annotation.format = FormatPatch(**values)
+        candidate = project.model_copy(update={"annotations": annotations})
+        return annotations, before, self.view(candidate), ids
+
+    def preview(self, project: Project, request: FormatRequest) -> dict:
+        _, before, after, ids = self.prepare_format(project, request)
+        selected = set(ids)
+        keys = list(request.patch.values()) + (["size_pt"] if request.size_change else [])
+        changes, after_blocks = [], []
+        for old, new in zip(before["blocks"], after["blocks"]):
+            if old["id"] in selected:
+                after_blocks.append(new)
                 changes.append(
                     {
-                        "id": block["id"],
-                        "text": block["text"],
-                        "before": {key: block["format"].get(key) for key in patch},
-                        "after": patch,
+                        "id": old["id"],
+                        "text": old["text"],
+                        "before": {key: old["format"].get(key) for key in keys},
+                        "after": {key: new["format"].get(key) for key in keys},
+                        "size_before": size_values(old),
+                        "size_after": size_values(new),
                     }
                 )
-        return {"revision": project.revision, "ids": ids, "changes": changes}
+        return {"revision": project.revision, "ids": ids, "changes": changes, "after_blocks": after_blocks}
 
     def apply(self, project: Project, request: FormatRequest):
-        preview = self.preview(project, request)
-        annotations = deepcopy(project.annotations)
-        for identity in preview["ids"]:
-            annotation = annotations.setdefault(identity, Annotation())
-            annotation.format = FormatPatch(**(annotation.format.values() | request.patch.values()))
-        if commit(project, annotations, f"调整 {len(preview['ids'])} 个段落的格式"):
+        annotations, _, _, ids = self.prepare_format(project, request)
+        label = (
+            f"调整 {len(ids)} 个段落的格式"
+            if request.size_change is None
+            else f"增减 {len(ids)} 段的逐文字字号"
+        )
+        if commit(project, annotations, label):
             self.save(project)
 
     def annotate(self, project: Project, request: AnnotationRequest):
@@ -292,6 +321,8 @@ class ProjectStore:
         for identity in set(request.ids):
             if identity in annotations:
                 values = annotations[identity].format.values()
+                if "size_pt" in request.keys:
+                    annotations[identity].sizes = None
                 annotations[identity].format = FormatPatch(
                     **{k: v for k, v in values.items() if k not in request.keys}
                 )
@@ -327,12 +358,66 @@ class ProjectStore:
         if commit(project, annotations, f"批量{labels[request.action]}：{len(ids)} 段"):
             self.save(project)
 
-    def export_annotations(self, project: Project) -> dict[str, Annotation]:
+    def export_annotations(self, project: Project, view=None) -> dict[str, Annotation]:
         return {
-            b["id"]: Annotation(format=FormatPatch(**b["effective_patch"]))
-            for b in self.view(project)["blocks"]
-            if b["effective_patch"]
+            b["id"]: Annotation(
+                format=FormatPatch(**b["effective_patch"]),
+                sizes=project.annotations.get(b["id"], Annotation()).sizes,
+            )
+            for b in (view or self.view(project))["blocks"]
+            if b["effective_patch"] or (b["id"] in project.annotations and project.annotations[b["id"]].sizes)
         }
+
+    def word_export(self, project: Project):
+        view = self.view(project)
+        annotations = self.export_annotations(project, view)
+        source = self.source(project.id)
+        output = export_docx(source, annotations)
+        audit = audit_export(source, output, set(annotations))
+        original = {b["id"]: b for b in self.original_view(project.id)["blocks"]}
+        current = {b["id"]: b for b in view["blocks"]}
+        changes = []
+        for identity in audit.pop("changed_ids"):
+            old, new, annotation = original[identity], current[identity], annotations[identity]
+            keys = list(annotation.format.values())
+            if annotation.sizes and "size_pt" not in keys:
+                keys.append("size_pt")
+            changes.append(
+                {
+                    "id": identity,
+                    "text": old["text"][:140],
+                    "properties": [
+                        {"key": key, "before": old["format"].get(key), "after": new["format"].get(key)}
+                        for key in keys
+                    ],
+                    "size_before": size_values(old),
+                    "size_after": size_values(new),
+                }
+            )
+        report = {
+            **audit,
+            "revision": project.revision,
+            "project_id": project.id,
+            "name": project.name,
+            "source_sha256": project.source_sha256,
+            "output_sha256": hashlib.sha256(output).hexdigest(),
+            "planned_paragraph_count": len(annotations),
+            "changed_paragraphs": changes,
+            "paragraph_count": len(view["blocks"]),
+            "warnings": view["warnings"]
+            + [
+                f"规则「{rule['name']}」{rule['scope_warning']}"
+                for rule in view["rules"]
+                if rule["enabled"] and rule.get("scope_warning")
+            ],
+            "limits": [
+                "字号、行距和分页开关可能使 Word 重新分页；这里不验证精确页数。",
+                "列表编号序列、条件表格样式、字体替代及网格在浏览器中可能显示不同。",
+                "报告只包含已保存状态，当前未应用草稿不在其中。",
+            ],
+            "enabled_rules": sum(r.enabled for r in project.rules),
+        }
+        return output, report
 
     def export_project(self, project):
         output = io.BytesIO()

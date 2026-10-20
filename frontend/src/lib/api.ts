@@ -1,4 +1,4 @@
-import type { AnnotationPatch, BulkAnnotation, DocumentView, FormatPatch, Preview, RecentProject, RuleAction, RulePreview, Selector } from './types';
+import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, FormatPatch, Preview, RecentProject, RuleAction, RulePreview, Selector, SizeChange } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -26,8 +26,9 @@ export const api = {
   get: (id: string) => request<DocumentView>(`/projects/${id}`),
   import: (file: File) => { const form = new FormData(); form.append('file', file); return request<DocumentView>('/projects/import', undefined, form); },
   select: (id: string, selector: Selector) => request<{ ids: string[]; revision: number }>(`/projects/${id}/select`, selector),
-  preview: (doc: DocumentView, selector: Selector, patch: FormatPatch) => request<Preview>(`/projects/${doc.id}/preview`, { revision: doc.revision, selector, patch }),
-  apply: (doc: DocumentView, selector: Selector, patch: FormatPatch) => request<DocumentView>(`/projects/${doc.id}/apply`, { revision: doc.revision, selector, patch }),
+  preview: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null) => request<Preview>(`/projects/${doc.id}/preview`, { revision: doc.revision, selector, patch, size_change }),
+  apply: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null) => request<DocumentView>(`/projects/${doc.id}/apply`, { revision: doc.revision, selector, patch, size_change }),
+  report: (doc: DocumentView) => request<ExportReport>(`/projects/${doc.id}/export/report`),
   annotate: (doc: DocumentView, id: string, patch: AnnotationPatch) => request<DocumentView>(`/projects/${doc.id}/annotate`, { revision: doc.revision, ids: [id], ...patch }),
   saveSelector: (doc: DocumentView, name: string, selector: Selector) => request<DocumentView>(`/projects/${doc.id}/selections/save`, { revision: doc.revision, name, selector }),
   deleteSelector: (doc: DocumentView, id: string) => request<DocumentView>(`/projects/${doc.id}/selections/delete`, { revision: doc.revision, id }),

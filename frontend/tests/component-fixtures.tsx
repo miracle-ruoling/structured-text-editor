@@ -5,3 +5,6 @@ export { DocumentCanvas } from '../src/components/DocumentCanvas';
 export { FormatSources } from '../src/components/FormatSources';
 export { BulkAnnotations } from '../src/components/BulkAnnotations';
 export { SelectorBuilder } from '../src/components/SelectorBuilder';
+export { FormatPanel } from '../src/components/FormatPanel';
+export { FormatFields } from '../src/components/FormatFields';
+export { ExportInspection } from '../src/components/ExportInspection';

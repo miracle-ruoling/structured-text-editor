@@ -3,10 +3,12 @@
 from copy import deepcopy
 
 from .models import FormatPatch, Project, RuleRequest
-from .selectors import predicate
+from .selectors import missing_scopes, predicate
+from .sizes import project_sizes
+from .structure import assign_chapters
 
 CONFLICTS = {"first_line_chars": "first_line_pt", "line_spacing": "line_spacing_pt"}
-FONT_KEYS = {"font_east_asia", "font_latin", "size_pt"}
+FONT_KEYS = {"font_east_asia", "font_latin", "size_pt", "bold", "italic"}
 
 
 def overlay(block: dict, patch: dict, label: str):
@@ -17,13 +19,17 @@ def overlay(block: dict, patch: dict, label: str):
             block["format"].pop(alternate, None)
             block["format_sources"].pop(alternate, None)
     block["mixed"] = [key for key in block["mixed"] if key not in patch]
+    if "size_pt" in patch:
+        block["paragraph_size_pt"] = patch["size_pt"]
+    if "line_spacing" in patch:
+        block["format"].pop("line_spacing_rule", None)
+        block["format_sources"].pop("line_spacing_rule", None)
     for run in block["runs"]:
         run["format"].update({k: v for k, v in patch.items() if k in FONT_KEYS})
 
 
 def resolve(original: dict, project: Project) -> dict:
     view = deepcopy(original)
-    compiled = [(rule, predicate(rule.selector)) for rule in project.rules]
     stats = {rule.id: {"matched_count": 0, "effective_count": 0} for rule in project.rules}
     for block in view["blocks"]:
         annotation = project.annotations.get(block["id"])
@@ -31,6 +37,16 @@ def resolve(original: dict, project: Project) -> dict:
             if annotation.role is not None:
                 block.update(role=annotation.role, role_source="手动指定", confirmed=True)
             block["tags"] = list(annotation.tags)
+    view["chapters"] = assign_chapters(view["blocks"])
+    compiled = []
+    for rule in project.rules:
+        missing = missing_scopes(view["blocks"], rule.selector)
+        stats[rule.id]["scope_warning"] = (
+            "范围已失效，规则暂不匹配：" + "、".join(missing) if missing else None
+        )
+        compiled.append((rule, predicate(rule.selector), bool(missing)))
+    for block in view["blocks"]:
+        annotation = project.annotations.get(block["id"])
         trace = {}
         for key in FormatPatch.model_fields:
             source_key = key if key in block["format"] else CONFLICTS.get(key, key)
@@ -45,8 +61,8 @@ def resolve(original: dict, project: Project) -> dict:
             ]
         effective = {}
         if block["editable"]:
-            for rule, check in compiled:
-                if not check(block):
+            for rule, check, missing in compiled:
+                if missing or not check(block):
                     continue
                 stats[rule.id]["matched_count"] += 1
                 if not rule.enabled:
@@ -70,6 +86,20 @@ def resolve(original: dict, project: Project) -> dict:
             effective.update(overrides)
             overlay(block, overrides, "本项目局部覆盖")
             block["overrides"] = overrides
+            if annotation and annotation.sizes:
+                project_sizes(block, annotation.sizes)
+                resolved_size = block["format"].get("size_pt")
+                block["overrides"]["size_pt"] = resolved_size
+                block["format_sources"]["size_pt"] = "本项目逐文字字号覆盖"
+                trace["size_pt"].append(
+                    {
+                        "kind": "local",
+                        "key": "size_pt",
+                        "label": "本项目逐文字字号覆盖",
+                        "value": resolved_size,
+                        "mixed": "size_pt" in block["mixed"],
+                    }
+                )
         winners = {layers[-1]["rule_id"] for layers in trace.values() if layers[-1]["kind"] == "rule"}
         for identity in winners:
             stats[identity]["effective_count"] += 1

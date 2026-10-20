@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { afterApply, paragraphInsets, scopedPatch, selectorComplete } from '../src/lib/workspace.ts';
+import { afterApply, afterSizeApply, paragraphInsets, scopedPatch, scopedSizeChange, selectorComplete, validSizeChange } from '../src/lib/workspace.ts';
 
 test('新增空白排除条件不能意外匹配整篇文档', () => {
   assert.equal(selectorComplete({ mode: 'all', conditions: [{ field: 'tag', op: 'is_not', value: '' }] }), false);
@@ -39,4 +39,20 @@ test('磅缩进与零值可区分；极端缩进按屏幕宽度约束', () => {
   assert.equal(paragraphInsets({ first_line_pt: -72 }).paddingLeft, 'min(96px, 35%)');
   assert.equal(paragraphInsets({ first_line_chars: 0, first_line_pt: 72 }).textIndent, 'min(0px, 50%)');
   assert.equal(paragraphInsets({ first_line_chars: 100 }).textIndent, 'min(1600px, 50%)');
+});
+
+
+test('相对字号遵循文字页范围，锁定保留操作而非某次结果', () => {
+  const change = { mode: 'points' as const, amount: 1.5 };
+  assert.equal(scopedSizeChange(change, 'paragraph', false), null);
+  assert.deepEqual(scopedSizeChange(change, 'font', false), change);
+  assert.deepEqual(scopedSizeChange(change, 'paragraph', true), change);
+  assert.equal(afterSizeApply(change, false), null);
+  assert.deepEqual(afterSizeApply(change, true), change);
+  assert.notEqual(afterSizeApply(change, true), change);
+  assert.equal(validSizeChange(change), true);
+  assert.equal(validSizeChange({ ...change, amount: 0 }), false);
+  assert.equal(validSizeChange({ ...change, amount: 0.1 }), false);
+  assert.equal(validSizeChange({ mode: 'chinese_steps', amount: 1.5 }), false);
+  assert.deepEqual(scopedPatch({ bold: false, keep_next: false }, 'font', false), { bold: false });
 });

@@ -176,7 +176,7 @@ def test_legacy_rules_migration_is_lazy_and_keeps_history(client, version):
     assert reloaded["blocks"] == doc["blocks"] and reloaded["rules"] == []
     assert path.read_bytes() == data
     doc = save(client, reloaded, rule())
-    assert json.loads(path.read_bytes())["version"] == 3
+    assert json.loads(path.read_bytes())["version"] == 4
     doc = post(client, doc, "undo")
     assert block(doc)["tags"] == ["旧标签"] and not doc["rules"]
     doc = post(client, doc, "undo")

@@ -2,6 +2,7 @@ import { Bookmark, BookOpen, Braces, FileText, Hash, Layers3, ShieldCheck, Spark
 import type { DocumentView, RecentProject, Selector } from '../lib/types';
 import { bodySelector, roles } from '../lib/types';
 import { selectorSignature } from '../lib/selection';
+import { useState } from 'react';
 
 type Props = { doc: DocumentView; recent: RecentProject[]; onOpen: (id: string) => void; selector: Selector | null; onSelect: (selector: Selector) => void; onDemo: () => void; disabled: boolean; onDeleteSelector: (id: string) => void };
 const presets = [
@@ -13,6 +14,7 @@ const presets = [
 ];
 
 export function Sidebar({ doc, recent, onOpen, selector, onSelect, onDemo, disabled, onDeleteSelector }: Props) {
+  const [chapterLimit, setChapterLimit] = useState(40);
   return <aside className="sidebar">
     <div className="sidebar-label">当前文档</div>
     <div className="file-card"><div className="file-icon"><FileText size={19} /></div><div><strong title={doc.name}>{doc.name.replace(/\.docx$/i, '')}</strong><span>DOCX · {doc.blocks.length} 个段落</span></div></div>
@@ -30,6 +32,11 @@ export function Sidebar({ doc, recent, onOpen, selector, onSelect, onDemo, disab
         return count > 0 && <button disabled={disabled} key={key} onClick={() => onSelect({ mode: 'all', conditions: [{ field: 'role', op: 'is', value: key }] })}><span className={`role-dot ${key}`} /><span>{label}</span><span className="count">{count}</span></button>;
       })}
     </nav>
+    <details className="chapter-navigation"><summary>按章节选择 <span>{doc.chapters.length}</span></summary>
+      <p className="help-text">选择标题及其下全部内容，包含子章节。</p>
+      <nav aria-label="章节范围">{doc.chapters.slice(0, chapterLimit).map(chapter => <button key={chapter.id} disabled={disabled} title={chapter.name} style={{ paddingLeft: 8 + Math.min(chapter.level, 4) * 9 }} onClick={() => onSelect({ mode: 'all', conditions: [{ field: 'chapter', op: 'is', value: chapter.id }] })}><span>{chapter.name}</span><small>{chapter.count}</small></button>)}</nav>
+      {doc.chapters.length > chapterLimit && <button className="text-button" onClick={() => setChapterLimit(chapterLimit + 40)}>再显示 40 个章节</button>}
+    </details>
     <div className="sidebar-bottom">
       <button className="example-button" disabled={disabled} onClick={onDemo}><BookOpen size={16} /><span>打开一份新示例</span><Sparkles size={13} /></button>
       <div className="local-note"><Braces size={18} /><div><strong>结构清晰，修改有据</strong><span>文件只在你的电脑上处理</span></div></div>

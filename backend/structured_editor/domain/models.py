@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from copy import deepcopy
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -35,6 +35,12 @@ class FormatPatch(Model):
     space_before_pt: float | None = Field(default=None, ge=0, le=200, multiple_of=0.05)
     space_after_pt: float | None = Field(default=None, ge=0, le=200, multiple_of=0.05)
     alignment: Literal["left", "center", "right", "both"] | None = None
+    bold: bool | None = None
+    italic: bool | None = None
+    page_break_before: bool | None = None
+    keep_next: bool | None = None
+    keep_lines: bool | None = None
+    widow_control: bool | None = None
 
     @field_validator("font_east_asia", "font_latin")
     @classmethod
@@ -51,7 +57,7 @@ class FormatPatch(Model):
 
 class Condition(Model):
     key: str | None = Field(default=None, pattern=r"^[A-Z][A-Z0-9_]{0,15}$")
-    field: Literal["role", "tag", "context", "text", "ids"]
+    field: Literal["role", "tag", "context", "text", "ids", "chapter", "section"]
     op: Literal["is", "is_not", "contains", "not_contains"] = "is"
     value: str = Field(default="", max_length=200)
     ids: list[str] | None = Field(default=None, max_length=20000)
@@ -70,6 +76,10 @@ class Condition(Model):
             raise ValueError("未知类别")
         if self.field == "context" and self.value not in ("table", "outside_table"):
             raise ValueError("未知结构位置")
+        if self.field == "chapter" and not re.fullmatch(r"intro|p[1-9][0-9]*", self.value):
+            raise ValueError("无效的章节范围")
+        if self.field == "section" and not re.fullmatch(r"sec[1-9][0-9]*", self.value):
+            raise ValueError("无效的 Word 分节范围")
         if self.field != "text" and self.op not in ("is", "is_not"):
             raise ValueError("这个字段仅支持是/不是")
         return self
@@ -106,10 +116,40 @@ class Selector(Model):
         return self
 
 
+FontSize = Annotated[float, Field(ge=1, le=200, multiple_of=0.5)]
+
+
+class SizeOverrides(Model):
+    paragraph_pt: FontSize | None = None
+    runs: dict[Annotated[str, Field(pattern=r"^(0|[1-9][0-9]*)$")], FontSize] = Field(
+        default_factory=dict, max_length=20000
+    )
+
+    @model_validator(mode="after")
+    def not_empty(self):
+        if self.paragraph_pt is None and not self.runs:
+            raise ValueError("逐文字字号设置不能为空")
+        return self
+
+
+class SizeChange(Model):
+    mode: Literal["points", "chinese_steps"]
+    amount: float = Field(ge=-100, le=100, multiple_of=0.5)
+
+    @model_validator(mode="after")
+    def valid_amount(self):
+        if self.amount == 0 or (
+            self.mode == "chinese_steps" and (not self.amount.is_integer() or abs(self.amount) > 15)
+        ):
+            raise ValueError("字号变化不能为零；中文字号需要 1 至 15 级的整数增减")
+        return self
+
+
 class Annotation(Model):
     role: Role | None = None
     tags: list[str] = Field(default_factory=list, max_length=30)
     format: FormatPatch = Field(default_factory=FormatPatch)
+    sizes: SizeOverrides | None = None
 
     @field_validator("tags")
     @classmethod
@@ -159,7 +199,7 @@ class Snapshot(Model):
 
 
 class Project(Model):
-    version: Literal[3] = 3
+    version: Literal[4] = 4
     id: str
     name: str
     source_sha256: str
@@ -174,9 +214,9 @@ class Project(Model):
     @model_validator(mode="before")
     @classmethod
     def migrate_legacy(cls, value):
-        if isinstance(value, dict) and value.get("version", 1) in (1, 2):
+        if isinstance(value, dict) and value.get("version", 1) in (1, 2, 3):
             value = deepcopy(value)
-            value["version"] = 3
+            value["version"] = 4
         return value
 
     @model_validator(mode="after")
@@ -198,11 +238,14 @@ class FormatRequest(Model):
     revision: int
     selector: Selector
     patch: FormatPatch
+    size_change: SizeChange | None = None
 
     @model_validator(mode="after")
     def not_empty(self):
-        if not self.patch.values():
+        if not self.patch.values() and self.size_change is None:
             raise ValueError("请至少设置一个格式属性")
+        if self.size_change is not None and self.patch.size_pt is not None:
+            raise ValueError("相对字号与统一字号不能同时设置")
         return self
 
 
@@ -261,7 +304,7 @@ class RuleRequest(RevisionRequest):
 
 class ClearOverridesRequest(RevisionRequest):
     ids: list[str] = Field(min_length=1, max_length=20000)
-    keys: list[str] = Field(min_length=1, max_length=8)
+    keys: list[str] = Field(min_length=1, max_length=14)
 
     @field_validator("keys")
     @classmethod

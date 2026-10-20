@@ -165,7 +165,7 @@ def test_old_project_migration_preserves_annotations_and_history(client):
         base + "/selections/save",
         json={"revision": reloaded["revision"], "name": "单段", "selector": scope("p3")},
     ).json()
-    assert json.loads(path.read_bytes())["version"] == 3
+    assert json.loads(path.read_bytes())["version"] == 4
     undone = client.post(base + "/undo", json={"revision": saved["revision"]}).json()
     assert undone["blocks"] == doc["blocks"] and undone["saved_selectors"] == []
     old_undo = client.post(base + "/undo", json={"revision": undone["revision"]}).json()

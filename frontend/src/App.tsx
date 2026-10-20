@@ -2,6 +2,7 @@ import { Check, CheckCheck, Download, FileInput, Fingerprint, FolderDown, Layers
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DocumentCanvas } from './components/DocumentCanvas';
 import { DraftDialog } from './components/DraftDialog';
+import { ExportInspection } from './components/ExportInspection';
 import { FormatPanel } from './components/FormatPanel';
 import { BulkAnnotations } from './components/BulkAnnotations';
 import { RulePanel } from './components/RulePanel';
@@ -9,14 +10,14 @@ import { ObjectInspector } from './components/ObjectInspector';
 import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
-import type { AnnotationPatch, BulkAnnotation, DocumentView, FormatPatch, FormatRule, Preview, RecentProject, Role, RuleAction, RulePreview, Selector } from './lib/types';
-import { afterApply, scopedPatch, selectorComplete } from './lib/workspace';
+import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, FormatPatch, FormatRule, Preview, RecentProject, Role, RuleAction, RulePreview, Selector, SizeChange } from './lib/types';
+import { afterApply, afterSizeApply, scopedPatch, scopedSizeChange, selectorComplete, validSizeChange } from './lib/workspace';
 import type { FormatTab } from './lib/workspace';
 import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition } from './lib/selection';
 import { newRule, ruleDraft, ruleIsDirty } from './lib/rules';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
-type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
+type ActivePreview = Preview & { selector: Selector; patch: FormatPatch; sizeChange: SizeChange | null };
 
 export default function App() {
   const [doc, setDoc] = useState<DocumentView | null>(null);
@@ -30,6 +31,8 @@ export default function App() {
   const [marking, setMarking] = useState(false);
   const [marked, setMarked] = useState<string[]>([]);
   const [patch, setPatch] = useState<FormatPatch>({});
+  const [sizeChange, setSizeChange] = useState<SizeChange | null>(null);
+  const [report, setReport] = useState<ExportReport | null>(null);
   const [formatTab, setFormatTab] = useState<FormatTab>('paragraph');
   const [includeOther, setIncludeOther] = useState(false);
   const [locked, setLocked] = useState(false);
@@ -50,10 +53,10 @@ export default function App() {
   const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean; message?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const operationLock = useRef(false);
-  const hasDraft = !!Object.keys(patch).length || !!tagDraft.trim() || !!preview || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || ruleIsDirty(rule, doc?.rules || []);
+  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!preview || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || ruleIsDirty(rule, doc?.rules || []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
-    setDoc(value); setPreview(null); setRulePreview(null);
+    setDoc(value); setPreview(null); setRulePreview(null); setReport(null);
     void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
     try { localStorage.setItem(LAST_PROJECT, value.id); } catch { /* Content is stored by the local service. */ }
   }, []);
@@ -133,7 +136,7 @@ export default function App() {
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
-      if (event.isComposing || pendingSwitch) return;
+      if (event.isComposing || pendingSwitch || report) return;
       if (event.defaultPrevented) return;
       if (event.key === 'Escape' && (preview || rulePreview) && !busy) {
         event.preventDefault(); setPreview(null); setRulePreview(null); return;
@@ -146,7 +149,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [history, preview, rulePreview, busy, pendingSwitch]);
+  }, [history, preview, rulePreview, busy, pendingSwitch, report]);
 
   function changeSelector(value: Selector, explicitAll = false) {
     const next = activateSelection(selectionSession, value, explicitAll);
@@ -159,7 +162,7 @@ export default function App() {
     setSelectorError(null); setOnlyMatches(false); setPreview(null);
   }
   function newDocument(document: DocumentView) {
-    acceptDoc(document); setCurrent(null); setTagDraft(''); setPatch({}); setLocked(false);
+    acceptDoc(document); setCurrent(null); setTagDraft(''); setPatch({}); setSizeChange(null); setLocked(false);
     setFormatTab('paragraph'); setIncludeOther(false); setTab('batch'); setOnlyMatches(false);
     setSelectionSession(emptySelectionSession()); setMatched([]);
     setSaveName(''); setMarking(false); setMarked([]); setSelectorError(null);
@@ -188,6 +191,13 @@ export default function App() {
       setMessage({ text: kind === 'docx' ? '已导出当前已保存状态的 Word 文件' : '已导出项目包副本，不会新增本地项目', error: false });
     });
   }
+  function inspectExport() {
+    if (doc) void run(async () => {
+      const result = await api.report(doc);
+      if (result.revision !== doc.revision) acceptDoc(await api.get(doc.id));
+      setReport(result);
+    });
+  }
   function annotate(id: string, annotation: AnnotationPatch): Promise<boolean> {
     if (!doc) return Promise.resolve(false);
     return run(async () => {
@@ -198,10 +208,12 @@ export default function App() {
   async function startPreview() {
     if (!doc || !selectionActive || !selectorComplete(selector) || matching || selectorError || !matched.length) return;
     const submitted = scopedPatch(patch, formatTab, includeOther);
+    const submittedSize = scopedSizeChange(sizeChange, formatTab, includeOther);
+    if (!validSizeChange(submittedSize)) return;
     await run(async () => {
-      const result = await api.preview(doc, selector, submitted);
+      const result = await api.preview(doc, selector, submitted, submittedSize);
       setRulePreview(null);
-      setPreview({ ...result, selector: structuredClone(selector), patch: { ...submitted } });
+      setPreview({ ...result, selector: structuredClone(selector), patch: { ...submitted }, sizeChange: submittedSize ? { ...submittedSize } : null });
     });
   }
 
@@ -281,8 +293,9 @@ export default function App() {
   async function applyPreview() {
     if (!doc || !preview) return;
     await run(async () => {
-      acceptDoc(await api.apply({ ...doc, revision: preview.revision }, preview.selector, preview.patch));
+      acceptDoc(await api.apply({ ...doc, revision: preview.revision }, preview.selector, preview.patch, preview.sizeChange));
       setPatch(afterApply(patch, locked));
+      setSizeChange(afterSizeApply(sizeChange, locked));
       if (!locked) setIncludeOther(false);
       setMessage({ text: `已调整 ${preview.ids.length} 个段落${locked ? '，草稿已锁定保留' : '，格式草稿已清空'}`, error: false });
     });
@@ -298,6 +311,7 @@ export default function App() {
         <input ref={inputRef} type="file" hidden accept=".docx,.sdoc" onChange={e => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="secondary" disabled={busy} onClick={() => inputRef.current?.click()}><FileInput size={15} />导入文件</button>
         <button className="secondary project-save" disabled={busy || !doc} title="下载已保存状态的便携副本，本机项目自动保存" onClick={() => download('project')}><FolderDown size={15} />导出项目包</button>
+        <button className="secondary" disabled={busy || !doc} onClick={inspectExport}>导出检查</button>
         <button className="primary" disabled={busy || !doc} onClick={() => download('docx')}><Download size={15} />导出 Word</button>
       </div>
     </header>
@@ -321,33 +335,35 @@ export default function App() {
           <button disabled={busy} role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'active' : ''} onClick={() => changePanel('rules')}><Layers size={15} />规则</button>
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
-          <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length}
+          <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
             error={selectorError} marked={marked} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
             loading={matching} active={selectionActive} onExit={exitSelection} canResume={previousSelector !== null}
             onResume={() => { if (previousSelector) changeSelector(previousSelector, true); }}
             onStart={() => changeSelector({ mode: 'all', conditions: [{ field: 'role', op: 'is', value: 'body' }] })} />
           <BulkAnnotations count={matched.length} disabled={busy || matching || !selectionActive || !!selectorError} tags={allTags} draft={bulkTagDraft} onDraft={setBulkTagDraft} onApply={bulkAnnotate} action={bulkAction} onAction={setBulkAction} role={bulkRole} onRole={setBulkRole} />
           <FormatPanel patch={patch} onChange={value => { setPreview(null); setPatch(value); }} preview={preview}
+            sizeChange={sizeChange} onSizeChange={value => { setPreview(null); setSizeChange(value); }}
             onPreview={() => void startPreview()} onApply={() => void applyPreview()} onCancel={() => setPreview(null)}
             busy={busy || matching || !selectionActive || !!selectorError} count={matched.length} tab={formatTab}
             onTab={value => { setFormatTab(value); setIncludeOther(false); setPreview(null); }}
             locked={locked} onLock={setLocked} includeOther={includeOther}
             onIncludeOther={value => { setIncludeOther(value); setPreview(null); }} />
-        </fieldset> : tab === 'rules' ? <RulePanel rules={doc.rules} draft={rule} preview={rulePreview} busy={busy}
+        </fieldset> : tab === 'rules' ? <RulePanel rules={doc.rules} draft={rule} preview={rulePreview} busy={busy} chapters={doc.chapters} sections={doc.sections}
           canUseScope={selectionActive && selectorComplete(selector) && !matching && !selectorError}
           onCreate={() => editRule(newRule(crypto.randomUUID().replaceAll('-', ''), selector))} onEdit={editRule}
           onChange={value => { setRule(value); setRulePreview(null); }} onDiscard={() => editRule(null)}
           onUseScope={() => { if (rule) { setRule({ ...rule, selector: structuredClone(selector) }); setRulePreview(null); } }}
           onLoadScope={() => { if (rule) changeSelector(structuredClone(rule.selector), true); }}
           onPreview={() => void previewRule()} onApply={() => void saveRulePreview()} onCancel={() => setRulePreview(null)} onAction={changeRule}
-        /> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={formatObject} onClearOverrides={clearOverrides} />}</div>
+        /> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">
       <div><span className="status-dot" /><span>本地运行</span><span className="status-divider" />{doc && <><span>{doc.blocks.length} 个段落</span><span className="status-divider" /><span>{!selectionActive ? '未筛选' : matching ? '正在匹配…' : `筛选匹配 ${matched.length} 段`}</span>{selectionActive && <button disabled={busy} onClick={exitSelection}>退出筛选</button>}</>}</div>
-      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 2B · 持续规则</span></div>
+      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 2C · 结构与格式</span></div>
     </footer>
     {pendingSwitch && <DraftDialog objectOnly={pendingSwitch.objectOnly} message={pendingSwitch.message} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
+    {report && <ExportInspection report={report} onClose={() => setReport(null)} />}
     {message && <div className={`toast ${message.error ? 'error' : ''}`} role={message.error ? 'alert' : 'status'}><span>{message.error ? '!' : <Check size={16} />}</span><p>{message.text}</p><button className="icon-button" onClick={() => setMessage(null)} aria-label="关闭提示"><X size={14} /></button></div>}
   </div>;
 }

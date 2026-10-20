@@ -17,13 +17,14 @@ def is_editable(paragraph):
 
 
 def project_document(package: DocxPackage) -> dict:
-    styles = StyleResolver(package.styles)
+    styles = StyleResolver(package.styles, package.theme, package.settings, package.numbering)
     blocks, warnings = [], []
+    section_ids, sections = physical_sections(package)
     for identity, paragraph in package.by_id.items():
         # Text boxes are preserved, but not represented twice inside their host paragraph.
         if any(a.tag == q("txbxContent") for a in paragraph.iterancestors()):
             continue
-        fmt, sources, runs, mixed, sid, sname, role, reason = styles.paragraph(paragraph)
+        fmt, sources, runs, mixed, sid, sname, role, reason, metadata = styles.paragraph(paragraph)
         text = "".join(run_text(run) for run in own_runs(paragraph))
         in_table = any(a.tag == q("tc") for a in paragraph.iterancestors())
         features = []
@@ -54,6 +55,8 @@ def project_document(package: DocxPackage) -> dict:
                 "mixed": mixed,
                 "features": features,
                 "overrides": {},
+                "section_id": section_ids[identity],
+                **metadata,
             }
         )
     known = {b["id"] for b in blocks}
@@ -99,4 +102,56 @@ def project_document(package: DocxPackage) -> dict:
         for name in package.archive.namelist()
     ):
         warnings.append("页眉、页脚、脚注与尾注不在本阶段的操作范围，导出原样保留。")
-    return {"blocks": blocks, "layout": children(package.body), "warnings": warnings}
+    if any(b["numbering"] for b in blocks):
+        warnings.append("已读取编号定义与级别；阅读视图不重新计算自动编号，Word 导出保留原序列。")
+    if any(
+        b["format"].get(key) is None and key in b["format"] and key not in b["mixed"]
+        for b in blocks
+        for key in ("font_east_asia", "font_latin")
+    ):
+        warnings.append("部分主题字体引用未能解析，显示字体可能替代；原引用保留，相对字号不猜测未知值。")
+    if package.styles is not None and package.styles.find(".//w:tblStylePr", NS) is not None:
+        warnings.append("表格条件样式尚未完整计算；原 XML 保留，阅读视图为近似排版。")
+    for section in sections:
+        section["count"] = sum(b["section_id"] == section["id"] for b in blocks)
+    return {"blocks": blocks, "layout": children(package.body), "warnings": warnings, "sections": sections}
+
+
+def physical_sections(package):
+    ids, sections, index = {}, [], 1
+    for child in package.body:
+        for paragraph in child.iter(q("p")):
+            ids[package.ids[paragraph]] = f"sec{index}"
+        boundary = (
+            child.find("w:pPr/w:sectPr", NS)
+            if child.tag == q("p")
+            else child
+            if child.tag == q("sectPr")
+            else None
+        )
+        if boundary is not None:
+            sections.append(
+                {
+                    "id": f"sec{index}",
+                    "name": f"Word 第 {index} 节",
+                    "break_type": value(boundary, "w:type") or "nextPage",
+                    "width_pt": int(value(boundary, "w:pgSz", "w")) / 20
+                    if value(boundary, "w:pgSz", "w")
+                    else None,
+                    "height_pt": int(value(boundary, "w:pgSz", "h")) / 20
+                    if value(boundary, "w:pgSz", "h")
+                    else None,
+                }
+            )
+            index += 1
+    if not sections or f"sec{index}" in ids.values():
+        sections.append(
+            {
+                "id": f"sec{index}",
+                "name": f"Word 第 {index} 节",
+                "break_type": "nextPage",
+                "width_pt": None,
+                "height_pt": None,
+            }
+        )
+    return ids, sections

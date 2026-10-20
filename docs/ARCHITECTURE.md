@@ -1,4 +1,4 @@
-# 文序架构（截至阶段 2B）
+# 文序架构（截至阶段 2C）
 
 2026-10-20。与 `PLAN.md` 配套，记录已经实现的行为。
 
@@ -9,14 +9,14 @@
   → ProjectStore 校验并保存原文件
   → DocxPackage 读取 ZIP 和 XML
   → StyleResolver + project_document 生成结构投影
-  → 叠加语义标注 → 有序规则 → 局部格式覆盖
+  → 叠加语义标注 → 重建章节 → 有序规则 → 局部格式及逐 run 字号覆盖
   → 前端阅读视图与对象检查
 
 选择器 → domain.selectors.select → 命中 ID
 格式草稿 → preview（只读）→ apply（检查 revision）
   → commit（保存原状态到历史）→ 原子保存 JSON
 
-导出 DOCX：原文件 + 规则与局部覆盖的有效补丁 → 定点修改 document.xml
+导出 DOCX：原文件 + 规则与局部覆盖的有效补丁 → 定点修改 document.xml → 实际输出保留审计
 导出 sdoc：原文件 + 完整项目 JSON → ZIP 项目包
 ```
 
@@ -32,7 +32,11 @@
 - `docx/xml.py`：命名空间、属性顺序、段落直属 run 定位，避免修改文本框内的嵌套段落。
 - `docx/styles.py`：常见样式继承、直接格式与字符样式投影，以及保守的语义分类建议。
 - `docx/reader.py`：段落对象、表格布局、复杂结构限制与提示。
-- `docx/writer.py`：只写明确设置的属性，其他属性保留。
+- `docx/writer.py`：只写明确设置的属性及逐 run 字号，其他属性保留。
+- `domain/sizes.py`：相对字号纯计算、中文档位与局部字号投影。
+- `domain/structure.py`：按语义角色与原大纲划分章节。
+- `docx/inheritance.py`：主题字体及编号定义读取。
+- `docx/audit.py`：实际输出的 ZIP、段落、文本、非格式结构保留检查。
 - `docx/sample.py`：确定性示例生成器；不依赖外部样例文件。
 - `storage.py`：项目读写、语义覆盖、事务协调、最近项目、便携包导入导出。
 - `api.py`：HTTP 路由、错误响应、本机来源限制、前端静态资源。
@@ -48,7 +52,7 @@ data/<32 位项目 ID>/
   project.json 项目状态，原子替换
 ```
 
-JSON `version=3`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、有序 rules、undo/redo。每个 annotation 保存可选手工 role、tags、局部 format。规则不固化为 annotation。兼容读入 v1/v2，项目 JSON 下一次保存才写为 v3；旧状态/快照缺少的集合默认为空。新包需要当前版本读取，源 DOCX 永不覆盖。
+JSON `version=4`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、有序 rules、undo/redo。每个 annotation 保存可选手工 role、tags、局部 format 与 sizes（段落标记和逐 run 绝对字号）。规则不固化为 annotation。兼容读入 v1/v2/v3，项目 JSON 下一次保存才写为 v4；旧状态/快照缺少的集合默认为空。新包需要当前版本读取，源 DOCX 永不覆盖。
 
 `.sdoc` 是 ZIP，内含同名两个文件。重新导入时检查源文件散列；完全一致的源文件、标注、命名筛选、规则和历史快照复用现有项目；不同状态校验标注段落 ID 后生成新项目 ID 与不重名的显示名称，避免覆盖现有项目。DOCX 字节完全相同时打开最近的已有项目。项目包包括最近 50 次历史，可在重新打开后撤销。
 
@@ -75,7 +79,7 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 }
 ```
 
-`all` 是交集、`any` 是并集。role/tag/context/ids 支持 is/is_not；text 另支持 contains/not_contains，文本匹配不区分大小写。标签匹配完整标签而非子串。空 all 选所有可编辑段落，空 any 无匹配。API 保留最多 5 层嵌套；UI 使用条件列表和高级表达式，命名筛选不接受嵌套 JSON 分组。前端以 selectionSession 管理当前条件、启用状态及上次退出的恢复快照：简单模式清空条件/退出筛选进入未筛选，不发送筛选请求；只有显式「全部内容」用空 all 表达全选。空标签/文字/框选/表达式在补全前不发请求。
+`all` 是交集、`any` 是并集。role/tag/context/ids/chapter/section 支持 is/is_not；text 另支持 contains/not_contains，文本匹配不区分大小写。标签匹配完整标签而非子串。空 all 选所有可编辑段落，空 any 无匹配。API 保留最多 5 层嵌套；UI 使用条件列表和高级表达式，命名筛选不接受嵌套 JSON 分组。前端以 selectionSession 管理当前条件、启用状态及上次退出的恢复快照：简单模式清空条件/退出筛选进入未筛选，不发送筛选请求；只有显式「全部内容」用空 all 表达全选。空标签/文字/框选/表达式在补全前不发请求。
 
 后端返回命中 ID。前端条件变更后防抖 120ms 请求，过期响应忽略；格式预览和提交直接使用同一后端逻辑，避免两套选择器语义。
 
@@ -90,12 +94,15 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 | line_spacing | 倍数 | line 乘 240、lineRule=auto、snapToGrid=0 |
 | space_before_pt/space_after_pt | 磅 | before/after 乘 20，删除直接按行间距、关闭自动间距 |
 | alignment | left/center/right/both | pPr/jc |
+| bold / italic | 不设置 / true / false | rPr/b、i，显式 1/0 |
+| page_break_before / keep_next / keep_lines / widow_control | 不设置 / true / false | pPr/pageBreakBefore、keepNext、keepLines、widowControl，显式 1/0 |
+| sizes | 每个源 run 与段落标记的绝对磅数 | 按索引写对应 rPr/sz、szCs |
 
 不改 styles.xml，不使用会影响未选中对象的样式批量替换。字体与字号写入所选段落的直属普通文字 run（包括超链接中的 run），不重建内容。数学对象保持原始 XML，首版不编辑数学字体/排版。
 
 无格式覆盖时导出直接返回原 DOCX 字节。存在覆盖时仅重新序列化 document.xml；ZIP 内其他项的解压后内容保持逐字节一致。压缩容器字节和 document.xml 的序列化形式不承诺完全相同。修改字号等可能自然导致 Word 重新分页。
 
-浏览器阅读视图读取常见样式、直接格式、字符样式和混合 run 属性。它不是完整 Word 排版引擎；主题字体解析、条件表格样式、编号布局、网格细节等后置。检查器会标出已知属性来源，未知值不伪造为确定值。
+浏览器阅读视图读取常见样式、直接格式、字符样式和混合 run 属性。它不是完整 Word 排版引擎；已支持常见主题字体、编号定义与级别段落属性；条件表格样式、完整编号序列/布局、网格细节仍未完整实现。检查器会标出已知属性来源，未知值不伪造为确定值。
 
 ## 6. HTTP 接口
 
@@ -115,22 +122,23 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 | POST | /api/projects/{id}/rules/preview、apply | 持续规则预览与变更，带 revision |
 | POST | /api/projects/{id}/overrides/clear | 清除项目局部格式覆盖，可撤销 |
 | POST | /api/projects/{id}/annotations/bulk | 按筛选一次性增删标签、设置/恢复类别 |
-| GET | /api/projects/{id}/export/docx、project | 下载结果 |
+| GET | /api/projects/{id}/export/docx、project | 下载结果（DOCX 自动保留检查） |
+| GET | /api/projects/{id}/export/report | 只读生成实际 DOCX 差异与兼容性报告，不改修订 |
 
 预览、提交、标注与历史操作带 revision。冲突返回 409，前端重新加载最新状态并提示重新预览。用户输入非法返回 400/422。文件路径不由请求参数直接决定。
 
 ## 7. 后续扩展边界
 
-- 阶段 2B 持续规则已建立在当前选择器之上，有独立优先级、冲突解释、覆盖与清除语义；2C 继续完善 Word 继承、相对字号和差异报告。
+- 阶段 2B 持续规则已建立在当前选择器之上，有独立优先级、冲突解释、覆盖与清除语义；2C 已补常见继承、相对字号、结构范围和实际导出报告。
 - 阶段 3 的原生编辑模型需要持久节点 ID 和内容事务；当前原包定位方案仅适用于结构未变的 DOCX 修改。
 - 将来的原生导出与当前保留式导出使用不同适配路径，明确记录支持/降级的属性。
-- 当前 .sdoc version=3 是工作项目格式，兼容读取 v1/v2，并非最终通用文档格式。
+- 当前 .sdoc version=4 是工作项目格式，兼容读取 v1/v2/v3，并非最终通用文档格式。
 
 
 ## 8. 验收后交互修复
 
 - `workspace.ts` 定义提交页签范围、应用后的草稿状态、选择器完整性、阅读用缩进计算，独立做纯逻辑测试。
-- 预览冻结 selector、patch 和 revision，提交使用冻结请求；更改格式、页签或筛选时清除旧预览。取消保留草稿，成功应用默认清空全部，锁定时保留；明确勾选才能跨页签提交。
+- 预览冻结 selector、patch、sizeChange 和 revision，提交使用冻结请求；更改格式、页签或筛选时清除旧预览。取消保留草稿，成功应用默认清空全部，锁定时保留；明确勾选才能跨页签提交。
 - `ChoiceInput` 采用原生 select + 显式自定义输入，候选项不按旧值过滤；选项使用内部索引，避免自定义值与特殊入口冲突。
 - 对象标注改为立即提交。标签只更新 tags，不把原自动 role 无意改成手工确认。网络失败保留未添加标签；输入法组合期间 Enter 不提交。
 - `DraftDialog` 只保护未提交草稿。浏览器离开有 beforeunload；对象切换只检查未添加标签，文档切换检查全部草稿，成功切换后清空。
@@ -176,8 +184,31 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 - 第三工作页 `RulePanel` 管理规则列表/草稿；`App.rule` 独立于单次 `patch`，`rulePreview` 独立于单次预览。`lib/rules.ts` 复制持久字段、剔除统计并检测未提交编辑。草稿和未添加的批量标签纳入离开文档保护。
 - `FormatFields` 复用文字/段落输入。单次格式仍用 scopedPatch；规则完整保存两个页签的所有属性，界面明确显示完整摘要。不复用锁定/单页提交开关，以免产生隐式作用域。
 - 规则条件从当前有效筛选复制，随后独立；修改通过载入批量筛选编辑再显式采用。规则页隐藏批量绿色高亮与仅匹配视图，避免把不相关的批量范围当成规则范围。
-- `DocumentCanvas` 对规则预览采用完整 after_blocks，单次预览继续用统一补丁；仅变化段落增加前后副本。切换工作页签取消预览并保留草稿。
+- `DocumentCanvas` 对规则及单次预览均采用完整 after_blocks；仅变化段落增加前后副本。切换工作页签取消预览并保留草稿。
 - `FormatSources` 解释当前属性来源及被覆盖层，提供局部单项/全部清除；只读对象无可用修改入口。
 - `BulkAnnotations` 可折叠；动作、类别、标签草稿放在 App，跨页签不重置动作。按钮显示当前命中数，成功后清空标签输入。
 - `ObjectQuickMenu` 在 body portal 中显示，尺寸定位受视口约束；外部点击/滚动/Esc 关闭。支持 Shift+F10、箭头切换按钮和键盘 focus，Esc 不穿透退出当前预览。检查对象不隐式加入筛选，框选仍需显式复制为条件。
 - 静态组件测试在 .artifacts/ui-tests 下临时编译并渲染，复用已安装的 Vite/esbuild，不启动浏览器、不访问本机网页。它能检查 JSX 输出与完整预览结果，不能代替点击、焦点或视觉实测。
+
+
+## 13. 阶段 2C：相对字号与 Word 继承
+
+`FormatRequest.size_change` 是可选单次请求，mode 为 points/chinese_steps，amount 非零；不能与 patch.size_pt 同时指定。points 半磅步进且单次 ±100 磅；中文整数 ±15 级。计算结果必须在 1–200 磅且半磅步进。中文序列和非标准档位算法见 STAGE2C.md。
+
+`ProjectStore.prepare_format` 校验 revision、匹配一次，基于当前规则/局部格式下每个可见 run 的有效值构造候选 `SizeOverrides`；任一未知/越界则整笔失败。sizes.paragraph_pt 为可选段落标记，sizes.runs 用源 own_runs 索引的字符串映射到绝对磅数，索引不因跳过无文本 run 而重新编号。空段落必须解析标记字号；非空段落的未知标记可留空。字号覆盖最后叠加于普通 patch，计入局部来源、混合属性和规则有效数。所有预览返回实际候选 after_blocks，与 apply 共用计算路径。
+
+逐 run 字号跟随 Annotation 进入全部快照、项目包和去重；v4 导入校验当前/历史的段落和可见 run 索引。绝对 patch.size_pt 清除 sizes；相对操作移除旧局部统一字号；清除 size_pt 同时清除 sizes。持续规则只能是绝对 patch，不保存 size_change，因此规则重算不累加；用户再次显式应用才继续增减。
+
+DOCX 关系解析只读包内主题、设置、编号，不访问外部 URL。ThemeFonts 处理 major/minor Latin、eastAsia 及常见语言 Hans/Hant/Jpan/Hang 补充字体；同层主题引用优先，后层直接字体可覆盖继承引用。StyleResolver 合并文档默认、编号段落格式、段落样式、段落直接属性；文字另加字符样式和 run 直接属性。样式粗斜体 true 为 toggle、false 不改变继承；run 直接 true/false 是绝对开关。编号字形 rPr 不污染正文 run。
+
+原大纲、编号实例/级别/模板/起始覆盖、分节和分页属性用于解释。精确/最小行距读取 line_spacing_pt 与 line_spacing_rule，单次/规则改为倍数时清理旧类型。此阶段仍不完整解析条件表格样式、复杂脚本或编号计数，未引入 Word 排版引擎。
+
+## 14. 结构范围与导出检查
+
+`domain.structure.assign_chapters` 在语义 role/tags 更新之后、规则匹配之前执行。表格外小标题建立章节栈，原大纲 0–8 转成 1–9 级，无原级别按一级。每段 chapter_ids 包含当前章节与祖先；intro 是首个标题前的内容。章节 ID 为标题段落 ID，表格内标题不影响外层章节。物理分节在 DOCX reader 按 body 的 sectPr 划分，结束段落归前一节，ID 为 sec1 等。章节、分节、角色、标签独立。
+
+`missing_scopes` 校验引用是否存在，包含否定条件。普通 select/preview/apply 抛错；持续规则保留定义并以 scope_warning 暂停匹配，撤销恢复结构后自动恢复。前端下拉明确显示失效项，不静默换成其他范围。章节与分节条件随项目保存，不允许直接跨文件复用。
+
+`word_export` 合成普通有效 patch 和局部 sizes，writer 只改源 document.xml，再调用 `audit_export`。审计比较 ZIP 成员与数据、所有段落 XML、文字/域指令/数学文本，并在支持写入的格式节点归一化后比较其余 XML 结构（包括文档、表格、对象）。非预期段落/包文件/文本/结构变化会拒绝下载。此审计不是全部 OOXML 属性的语义验证，也不验证视觉分页。
+
+报告包含 revision、project_id、源/输出散列、变化段落与格式/字号、变化和保留的 ZIP 项、保留检查结果、失效规则与已知限制。只读 GET 不增加项目或修订；未应用草稿不参与。顶部可选查看报告，直接 Word 导出也执行检查。ExportInspection 用原生 modal dialog，Esc 只关闭它；下载 JSON 使用正在显示的报告，状态更新后清除旧报告。变化列表按 30 段展开，章节导航按 40 项展开。

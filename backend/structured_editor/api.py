@@ -8,7 +8,6 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .docx.package import MAX_UPLOAD
-from .docx.writer import export_docx
 from .domain.commands import ConflictError
 from .domain.models import (
     AnnotationRequest,
@@ -183,12 +182,18 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def export_word(identity: str):
         with store.lock:
             project = store.load(identity)
-            content = export_docx(store.source(identity), store.export_annotations(project))
+            content, _ = store.word_export(project)
             return download(
                 content,
                 Path(project.name).stem + "_文序.docx",
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             )
+
+    @app.get("/api/projects/{identity}/export/report")
+    def export_report(identity: str):
+        with store.lock:
+            _, report = store.word_export(store.load(identity))
+            return report
 
     @app.get("/api/projects/{identity}/export/project")
     def export_project(identity: str):

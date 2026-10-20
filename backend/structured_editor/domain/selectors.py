@@ -30,6 +30,10 @@ def leaf_matches(block, selector, value, ids):
         result = bool(block["in_table"]) == (value == "table")
     elif selector.field == "ids":
         result = block["id"] in ids
+    elif selector.field == "chapter":
+        result = value in block.get("chapter_ids", [])
+    elif selector.field == "section":
+        result = block.get("section_id") == value
     else:
         actual = block["text"].casefold()
         result = value.casefold() in actual if "contains" in selector.op else actual == value.casefold()
@@ -41,5 +45,24 @@ def matches(block: dict, selector: Selector | Condition) -> bool:
 
 
 def select(blocks: list[dict], selector: Selector) -> list[str]:
+    missing = missing_scopes(blocks, selector)
+    if missing:
+        raise ValueError("结构范围已不存在，请重新选择：" + "、".join(missing))
     check = predicate(selector)
     return [block["id"] for block in blocks if block.get("editable", True) and check(block)]
+
+
+def missing_scopes(blocks: list[dict], selector: Selector) -> list[str]:
+    available = {
+        "chapter": {c for b in blocks for c in b.get("chapter_ids", [])},
+        "section": {b.get("section_id") for b in blocks},
+    }
+
+    def visit(group):
+        for condition in group.conditions:
+            if isinstance(condition, Selector):
+                yield from visit(condition)
+            elif condition.field in available and condition.value not in available[condition.field]:
+                yield ("章节 " if condition.field == "chapter" else "分节 ") + condition.value
+
+    return list(dict.fromkeys(visit(selector)))
