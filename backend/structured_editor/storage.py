@@ -18,13 +18,17 @@ from .domain.commands import check_revision, commit, touch, travel
 from .domain.models import (
     Annotation,
     AnnotationRequest,
+    BulkAnnotationRequest,
+    ClearOverridesRequest,
     DeleteSelectorRequest,
     FormatPatch,
     FormatRequest,
     Project,
+    RuleRequest,
     SavedSelector,
     SaveSelectorRequest,
 )
+from .domain.rules import changed_rules, resolve
 from .domain.selectors import select
 
 
@@ -141,6 +145,7 @@ class ProjectStore:
                         existing.source_sha256 == project.source_sha256
                         and existing.annotations == project.annotations
                         and existing.saved_selectors == project.saved_selectors
+                        and existing.rules == project.rules
                         and existing.undo == project.undo
                         and existing.redo == project.redo
                     ):
@@ -165,25 +170,7 @@ class ProjectStore:
         return project
 
     def view(self, project: Project) -> dict:
-        view = deepcopy(self.original_view(project.id))
-        for block in view["blocks"]:
-            annotation = project.annotations.get(block["id"])
-            if annotation is None:
-                continue
-            if annotation.role is not None:
-                block.update(role=annotation.role, role_source="手动指定", confirmed=True)
-            block["tags"] = annotation.tags
-            overrides = annotation.format.values()
-            block["overrides"] = overrides
-            block["format"].update(overrides)
-            if "first_line_chars" in overrides:
-                block["format"].pop("first_line_pt", None)
-            if "line_spacing" in overrides:
-                block["format"].pop("line_spacing_pt", None)
-            block["format_sources"].update({key: "本项目的显式设置" for key in overrides})
-            block["mixed"] = [key for key in block["mixed"] if key not in overrides]
-            for run in block["runs"]:
-                run["format"].update(overrides)
+        view = resolve(self.original_view(project.id), project)
         return {
             **view,
             "id": project.id,
@@ -267,6 +254,85 @@ class ProjectStore:
         check_revision(project, revision)
         travel(project, direction)
         self.save(project)
+
+    def preview_rule(self, project: Project, request: RuleRequest):
+        check_revision(project, request.revision)
+        rules, label = changed_rules(project, request)
+        candidate = project.model_copy(update={"rules": rules})
+        before = self.view(project)
+        after = self.view(candidate)
+        changes, after_blocks = [], []
+        for old, new in zip(before["blocks"], after["blocks"]):
+            if any(old[key] != new[key] for key in ("format", "runs", "mixed")):
+                after_blocks.append(new)
+                changes.append(
+                    {"id": old["id"], "text": old["text"], "before": old["format"], "after": new["format"]}
+                )
+        return {
+            "revision": project.revision,
+            "label": label,
+            "ids": [b["id"] for b in after_blocks],
+            "changes": changes,
+            "after_blocks": after_blocks,
+            "rules": after["rules"],
+        }
+
+    def change_rule(self, project: Project, request: RuleRequest):
+        check_revision(project, request.revision)
+        rules, label = changed_rules(project, request)
+        if commit(project, project.annotations, label, rules=rules):
+            self.save(project)
+
+    def clear_overrides(self, project: Project, request: ClearOverridesRequest):
+        check_revision(project, request.revision)
+        editable = {b["id"] for b in self.original_view(project.id)["blocks"] if b["editable"]}
+        if not set(request.ids) <= editable:
+            raise ValueError("选择中包含不支持修改的段落。")
+        annotations = deepcopy(project.annotations)
+        for identity in set(request.ids):
+            if identity in annotations:
+                values = annotations[identity].format.values()
+                annotations[identity].format = FormatPatch(
+                    **{k: v for k, v in values.items() if k not in request.keys}
+                )
+        if commit(project, annotations, f"清除 {len(set(request.ids))} 段的局部格式覆盖"):
+            self.save(project)
+
+    def bulk_annotate(self, project: Project, request: BulkAnnotationRequest):
+        check_revision(project, request.revision)
+        ids = select(self.view(project)["blocks"], request.selector)
+        if not ids:
+            raise ValueError("没有匹配的可编辑段落")
+        annotations = deepcopy(project.annotations)
+        for identity in ids:
+            previous = annotations.get(identity, Annotation())
+            data = previous.model_dump()
+            if request.action == "add_tag":
+                if request.tag not in data["tags"]:
+                    data["tags"].append(request.tag)
+            elif request.action == "remove_tag":
+                data["tags"] = [tag for tag in data["tags"] if tag != request.tag]
+            else:
+                data["role"] = request.role if request.action == "set_role" else None
+            # Construct and validate every result before committing any of them.
+            updated = Annotation(**data)
+            if updated != previous:
+                annotations[identity] = updated
+        labels = {
+            "add_tag": "添加标签",
+            "remove_tag": "移除标签",
+            "set_role": "设置类别",
+            "reset_role": "恢复自动类别",
+        }
+        if commit(project, annotations, f"批量{labels[request.action]}：{len(ids)} 段"):
+            self.save(project)
+
+    def export_annotations(self, project: Project) -> dict[str, Annotation]:
+        return {
+            b["id"]: Annotation(format=FormatPatch(**b["effective_patch"]))
+            for b in self.view(project)["blocks"]
+            if b["effective_patch"]
+        }
 
     def export_project(self, project):
         output = io.BytesIO()

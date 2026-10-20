@@ -1,4 +1,4 @@
-import type { AnnotationPatch, DocumentView, FormatPatch, Preview, RecentProject, Selector } from './types';
+import type { AnnotationPatch, BulkAnnotation, DocumentView, FormatPatch, Preview, RecentProject, RuleAction, RulePreview, Selector } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -32,6 +32,10 @@ export const api = {
   saveSelector: (doc: DocumentView, name: string, selector: Selector) => request<DocumentView>(`/projects/${doc.id}/selections/save`, { revision: doc.revision, name, selector }),
   deleteSelector: (doc: DocumentView, id: string) => request<DocumentView>(`/projects/${doc.id}/selections/delete`, { revision: doc.revision, id }),
   history: (doc: DocumentView, direction: 'undo' | 'redo') => request<DocumentView>(`/projects/${doc.id}/${direction}`, { revision: doc.revision }),
+  previewRule: (doc: DocumentView, action: RuleAction) => request<Omit<RulePreview, 'request'>>(`/projects/${doc.id}/rules/preview`, { revision: doc.revision, ...action }),
+  applyRule: (doc: DocumentView, action: RuleAction) => request<DocumentView>(`/projects/${doc.id}/rules/apply`, { revision: doc.revision, ...action }),
+  clearOverrides: (doc: DocumentView, id: string, keys: string[]) => request<DocumentView>(`/projects/${doc.id}/overrides/clear`, { revision: doc.revision, ids: [id], keys }),
+  bulkAnnotate: (doc: DocumentView, selector: Selector, action: BulkAnnotation) => request<DocumentView>(`/projects/${doc.id}/annotations/bulk`, { revision: doc.revision, selector, ...action }),
   download: async (doc: DocumentView, kind: 'docx' | 'project') => {
     const response = await fetch(`/api/projects/${doc.id}/export/${kind}`);
     if (!response.ok) { const data = await response.json(); throw new Error(data.detail || '导出失败'); }

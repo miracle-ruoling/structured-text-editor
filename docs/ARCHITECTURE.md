@@ -1,6 +1,6 @@
-# 文序架构（截至阶段 2A）
+# 文序架构（截至阶段 2B）
 
-2026-10-19。与 `PLAN.md` 配套，记录已经实现的行为。
+2026-10-20。与 `PLAN.md` 配套，记录已经实现的行为。
 
 ## 1. 数据流
 
@@ -9,14 +9,14 @@
   → ProjectStore 校验并保存原文件
   → DocxPackage 读取 ZIP 和 XML
   → StyleResolver + project_document 生成结构投影
-  → 叠加项目的 Annotation
+  → 叠加语义标注 → 有序规则 → 局部格式覆盖
   → 前端阅读视图与对象检查
 
 选择器 → domain.selectors.select → 命中 ID
 格式草稿 → preview（只读）→ apply（检查 revision）
   → commit（保存原状态到历史）→ 原子保存 JSON
 
-导出 DOCX：原文件 + 当前格式覆盖 → 定点修改 document.xml
+导出 DOCX：原文件 + 规则与局部覆盖的有效补丁 → 定点修改 document.xml
 导出 sdoc：原文件 + 完整项目 JSON → ZIP 项目包
 ```
 
@@ -26,6 +26,7 @@
 
 - `domain/models.py`：Pydantic 边界模型；字段白名单、单位与范围、选择器树、标注和历史快照。
 - `domain/selectors.py`：唯一的筛选求值实现，供高亮、预览、提交共用。不可编辑对象永不参与操作。
+- `domain/rules.py`：纯格式投影、规则变更验证、逐属性来源与统计；不读文件、不拼 XML。
 - `domain/commands.py`：revision 校验、状态提交、撤销与重做；不做文件 I/O。
 - `docx/package.py`：ZIP 限制、DOCX 验证、原包保留；支持常规 Transitional OOXML。
 - `docx/xml.py`：命名空间、属性顺序、段落直属 run 定位，避免修改文本框内的嵌套段落。
@@ -47,9 +48,9 @@ data/<32 位项目 ID>/
   project.json 项目状态，原子替换
 ```
 
-JSON `version=2`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、undo/redo。每个 annotation 保存可选手工 role、tags、显式 format。未标注对象使用源文档投影。v1 读入时兼容升级，原文件直到下一次保存才写成 v2；旧历史快照的 saved_selectors 默认为空。v2 项目包需要当前版本读取。
+JSON `version=3`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、有序 rules、undo/redo。每个 annotation 保存可选手工 role、tags、局部 format。规则不固化为 annotation。兼容读入 v1/v2，项目 JSON 下一次保存才写为 v3；旧状态/快照缺少的集合默认为空。新包需要当前版本读取，源 DOCX 永不覆盖。
 
-`.sdoc` 是 ZIP，内含同名两个文件。重新导入时检查源文件散列；完全一致的源文件、标注、命名筛选和历史快照复用现有项目；不同状态校验标注段落 ID 后生成新项目 ID 与不重名的显示名称，避免覆盖现有项目。DOCX 字节完全相同时打开最近的已有项目。项目包包括最近 50 次历史，可在重新打开后撤销。
+`.sdoc` 是 ZIP，内含同名两个文件。重新导入时检查源文件散列；完全一致的源文件、标注、命名筛选、规则和历史快照复用现有项目；不同状态校验标注段落 ID 后生成新项目 ID 与不重名的显示名称，避免覆盖现有项目。DOCX 字节完全相同时打开最近的已有项目。项目包包括最近 50 次历史，可在重新打开后撤销。
 
 JSON 写入先落临时文件、flush/fsync，然后 os.replace。服务内部用 RLock 串行化项目状态操作；revision 阻止多个页面用过期状态互相覆盖。该锁针对单个服务进程，首版不要以多进程 worker 同时访问同一 data 目录。
 
@@ -111,16 +112,19 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 | POST | /api/projects/{id}/annotate | 手工分类/标签事务 |
 | POST | /api/projects/{id}/undo、redo | 状态历史 |
 | POST | /api/projects/{id}/selections/save、delete | 保存/删除命名筛选，带 revision，可撤销 |
+| POST | /api/projects/{id}/rules/preview、apply | 持续规则预览与变更，带 revision |
+| POST | /api/projects/{id}/overrides/clear | 清除项目局部格式覆盖，可撤销 |
+| POST | /api/projects/{id}/annotations/bulk | 按筛选一次性增删标签、设置/恢复类别 |
 | GET | /api/projects/{id}/export/docx、project | 下载结果 |
 
 预览、提交、标注与历史操作带 revision。冲突返回 409，前端重新加载最新状态并提示重新预览。用户输入非法返回 400/422。文件路径不由请求参数直接决定。
 
 ## 7. 后续扩展边界
 
-- 阶段 2 的持续规则建立在当前选择器之上，必须单独定义优先级、冲突解释、覆盖与清除语义，不能直接堆叠在当前覆盖字典中。
+- 阶段 2B 持续规则已建立在当前选择器之上，有独立优先级、冲突解释、覆盖与清除语义；2C 继续完善 Word 继承、相对字号和差异报告。
 - 阶段 3 的原生编辑模型需要持久节点 ID 和内容事务；当前原包定位方案仅适用于结构未变的 DOCX 修改。
 - 将来的原生导出与当前保留式导出使用不同适配路径，明确记录支持/降级的属性。
-- 当前 .sdoc version=2 是工作项目格式，兼容读取 v1，并非最终通用文档格式。
+- 当前 .sdoc version=3 是工作项目格式，兼容读取 v1/v2，并非最终通用文档格式。
 
 
 ## 8. 验收后交互修复
@@ -151,3 +155,29 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 - SelectorBuilder 在未启用时只渲染空闲容器，活动条件、表达式、保存栏和匹配摘要均不渲染。退出筛选清除匹配/预览/仅匹配视图，不修改工作页签或格式草稿。
 - 高级表达式在条件列表与添加入口之后渲染；快照行只呈现类别、关系和计数，编号另占一整行折叠展示。快照范围不可原地更新，关系是/不是仍可改。
 - 全局筛选暂缓：当前保存范围属于项目，未来与持续规则模板共用可跨文档的语义条件；含 ids 的快照不得直接跨文档使用。
+
+
+## 11. 阶段 2B：规则投影与事务
+
+`FormatRule` 含 id、name、selector、patch、enabled，复用已有选择器和 FormatPatch 校验。规则条件是 UI 可编辑的单层条件/高级表达式。Project 和 Snapshot 同时记录 rules、annotations、saved_selectors；任何一种操作的撤销均恢复三者，旧项目读取不改写。
+
+`domain.rules.resolve(original, project)` 深复制源投影，先写入语义 role/tags，再匹配每条启用规则，按列表顺序逐属性 overlay，最后叠加局部 Annotation.format。匹配只看语义而非格式，不存在格式循环；全部操作排除只读对象。first_line_chars/line_spacing 覆盖时清理对应磅属性，字体属性投影到各 run，只有被设置的混合属性才被消解。
+
+每段返回 `effective_patch`（导出用）、`format_trace`（原来源、命中规则、局部覆盖，最后一层胜出）与本来的 `overrides`（仅局部）。每条规则附带 `matched_count`（含停用时的潜在命中）、`effective_count`（启用且至少有一项属性由它最终决定的段落数）。后者是归属统计，不等于与原文件视觉不同的段落数。
+
+`RuleRequest` 动作 save/delete/toggle/move 的参数互斥，完整验证后 commit。新增/修改先 preview，再使用冻结请求和 revision 提交；列表启停/删除/移动直接提交，可撤销。preview 在候选项目上计算，比较段落 format/runs/mixed，返回变化段落的完整 `after_blocks`，不把“删除属性”误当成空补丁。零视觉变化也能保存有效定义。
+
+`ProjectStore.export_annotations` 从有效补丁构造传给原 DOCX writer 的 Annotation 映射。所有规则计算仍在领域层；XML 只由适配器操作。没有有效补丁则 writer 返回源字节，因此撤回规则可完整恢复原始混合 run 格式，无需把当前显示值反写回原包。
+
+`annotations/bulk` 先匹配一次，再构造所有候选标注并校验，最后原子 commit；添加标签不重复，移除不替换其他标签，类别与格式保持独立。30 标签上限等错误不会部分保存。`overrides/clear` 只删除指定局部键，恢复下层，不清除源 Word 的直接格式。
+
+## 12. 2B 前端状态与组件
+
+- 第三工作页 `RulePanel` 管理规则列表/草稿；`App.rule` 独立于单次 `patch`，`rulePreview` 独立于单次预览。`lib/rules.ts` 复制持久字段、剔除统计并检测未提交编辑。草稿和未添加的批量标签纳入离开文档保护。
+- `FormatFields` 复用文字/段落输入。单次格式仍用 scopedPatch；规则完整保存两个页签的所有属性，界面明确显示完整摘要。不复用锁定/单页提交开关，以免产生隐式作用域。
+- 规则条件从当前有效筛选复制，随后独立；修改通过载入批量筛选编辑再显式采用。规则页隐藏批量绿色高亮与仅匹配视图，避免把不相关的批量范围当成规则范围。
+- `DocumentCanvas` 对规则预览采用完整 after_blocks，单次预览继续用统一补丁；仅变化段落增加前后副本。切换工作页签取消预览并保留草稿。
+- `FormatSources` 解释当前属性来源及被覆盖层，提供局部单项/全部清除；只读对象无可用修改入口。
+- `BulkAnnotations` 可折叠；动作、类别、标签草稿放在 App，跨页签不重置动作。按钮显示当前命中数，成功后清空标签输入。
+- `ObjectQuickMenu` 在 body portal 中显示，尺寸定位受视口约束；外部点击/滚动/Esc 关闭。支持 Shift+F10、箭头切换按钮和键盘 focus，Esc 不穿透退出当前预览。检查对象不隐式加入筛选，框选仍需显式复制为条件。
+- 静态组件测试在 .artifacts/ui-tests 下临时编译并渲染，复用已安装的 Vite/esbuild，不启动浏览器、不访问本机网页。它能检查 JSX 输出与完整预览结果，不能代替点击、焦点或视觉实测。

@@ -18,9 +18,14 @@ def touch(project: Project):
     project.updated_at = datetime.now(UTC).isoformat()
 
 
-def commit(project: Project, annotations: dict, label: str, saved_selectors=None):
+def commit(project: Project, annotations: dict, label: str, saved_selectors=None, rules=None):
     selections = project.saved_selectors if saved_selectors is None else saved_selectors
-    if project.annotations == annotations and project.saved_selectors == selections:
+    rules = project.rules if rules is None else rules
+    if (
+        project.annotations == annotations
+        and project.saved_selectors == selections
+        and project.rules == rules
+    ):
         return False
     project.undo = [
         *project.undo[-49:],
@@ -28,11 +33,13 @@ def commit(project: Project, annotations: dict, label: str, saved_selectors=None
             label=label,
             annotations=deepcopy(project.annotations),
             saved_selectors=deepcopy(project.saved_selectors),
+            rules=deepcopy(project.rules),
         ),
     ]
     project.redo = []
     project.annotations = annotations
     project.saved_selectors = deepcopy(selections)
+    project.rules = deepcopy(rules)
     touch(project)
     return True
 
@@ -48,10 +55,12 @@ def travel(project: Project, direction: str):
             label=snapshot.label,
             annotations=deepcopy(project.annotations),
             saved_selectors=deepcopy(project.saved_selectors),
+            rules=deepcopy(project.rules),
         )
     )
     if len(destination) > 50:
         del destination[0]
     project.annotations = deepcopy(snapshot.annotations)
     project.saved_selectors = deepcopy(snapshot.saved_selectors)
+    project.rules = deepcopy(snapshot.rules)
     touch(project)

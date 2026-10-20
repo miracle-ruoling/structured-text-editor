@@ -140,30 +140,43 @@ class SavedSelector(Model):
         return value
 
 
+class FormatRule(SavedSelector):
+    patch: FormatPatch
+    enabled: bool = True
+
+    @model_validator(mode="after")
+    def has_format(self):
+        if not self.patch.values():
+            raise ValueError("规则需要至少一个格式属性")
+        return self
+
+
 class Snapshot(Model):
     label: str
     annotations: dict[str, Annotation]
     saved_selectors: list[SavedSelector] = Field(default_factory=list, max_length=50)
+    rules: list[FormatRule] = Field(default_factory=list, max_length=50)
 
 
 class Project(Model):
-    version: Literal[2] = 2
+    version: Literal[3] = 3
     id: str
     name: str
     source_sha256: str
     revision: int = 0
     annotations: dict[str, Annotation] = Field(default_factory=dict)
     saved_selectors: list[SavedSelector] = Field(default_factory=list, max_length=50)
+    rules: list[FormatRule] = Field(default_factory=list, max_length=50)
     undo: list[Snapshot] = Field(default_factory=list, max_length=50)
     redo: list[Snapshot] = Field(default_factory=list, max_length=50)
     updated_at: str = ""
 
     @model_validator(mode="before")
     @classmethod
-    def migrate_v1(cls, value):
-        if isinstance(value, dict) and value.get("version", 1) == 1:
+    def migrate_legacy(cls, value):
+        if isinstance(value, dict) and value.get("version", 1) in (1, 2):
             value = deepcopy(value)
-            value["version"] = 2
+            value["version"] = 3
         return value
 
     @model_validator(mode="after")
@@ -173,6 +186,11 @@ class Project(Model):
                 items
             ):
                 raise ValueError("已保存筛选的名称和 ID 不能重复")
+        for items in [self.rules, *[s.rules for s in self.undo + self.redo]]:
+            if len({r.id for r in items}) != len(items) or len({r.name.casefold() for r in items}) != len(
+                items
+            ):
+                raise ValueError("规则的名称和 ID 不能重复")
         return self
 
 
@@ -218,3 +236,53 @@ class SaveSelectorRequest(RevisionRequest):
 
 class DeleteSelectorRequest(RevisionRequest):
     id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class RuleRequest(RevisionRequest):
+    action: Literal["save", "delete", "toggle", "move"]
+    rule: FormatRule | None = None
+    id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+    enabled: bool | None = None
+    position: int | None = Field(default=None, ge=0, le=49)
+
+    @model_validator(mode="after")
+    def valid_action(self):
+        required = {
+            "save": {"rule"},
+            "delete": {"id"},
+            "toggle": {"id", "enabled"},
+            "move": {"id", "position"},
+        }
+        present = {k for k in ("rule", "id", "enabled", "position") if getattr(self, k) is not None}
+        if present != required[self.action]:
+            raise ValueError("规则操作参数与动作不一致")
+        return self
+
+
+class ClearOverridesRequest(RevisionRequest):
+    ids: list[str] = Field(min_length=1, max_length=20000)
+    keys: list[str] = Field(min_length=1, max_length=8)
+
+    @field_validator("keys")
+    @classmethod
+    def valid_keys(cls, keys):
+        if not set(keys) <= FormatPatch.model_fields.keys():
+            raise ValueError("未知的局部格式属性")
+        return list(dict.fromkeys(keys))
+
+
+class BulkAnnotationRequest(RevisionRequest):
+    selector: Selector
+    action: Literal["add_tag", "remove_tag", "set_role", "reset_role"]
+    tag: str | None = Field(default=None, min_length=1, max_length=40)
+    role: Role | None = None
+
+    @model_validator(mode="after")
+    def valid_action(self):
+        if self.action in ("add_tag", "remove_tag"):
+            if not self.tag or not self.tag.strip() or self.role is not None:
+                raise ValueError("请填写标签，且不要同时指定类别")
+            self.tag = self.tag.strip()
+        elif self.tag is not None or (self.action == "set_role") != (self.role is not None):
+            raise ValueError("类别操作参数与动作不一致")
+        return self

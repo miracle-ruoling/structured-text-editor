@@ -1,16 +1,19 @@
-import { Check, CheckCheck, Download, FileInput, Fingerprint, FolderDown, LoaderCircle, Redo2, SlidersHorizontal, Undo2, X } from 'lucide-react';
+import { Check, CheckCheck, Download, FileInput, Fingerprint, FolderDown, Layers, LoaderCircle, Redo2, SlidersHorizontal, Undo2, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DocumentCanvas } from './components/DocumentCanvas';
 import { DraftDialog } from './components/DraftDialog';
 import { FormatPanel } from './components/FormatPanel';
+import { BulkAnnotations } from './components/BulkAnnotations';
+import { RulePanel } from './components/RulePanel';
 import { ObjectInspector } from './components/ObjectInspector';
 import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
-import type { AnnotationPatch, DocumentView, FormatPatch, Preview, RecentProject, Selector } from './lib/types';
+import type { AnnotationPatch, BulkAnnotation, DocumentView, FormatPatch, FormatRule, Preview, RecentProject, Role, RuleAction, RulePreview, Selector } from './lib/types';
 import { afterApply, scopedPatch, selectorComplete } from './lib/workspace';
 import type { FormatTab } from './lib/workspace';
 import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition } from './lib/selection';
+import { newRule, ruleDraft, ruleIsDirty } from './lib/rules';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 type ActivePreview = Preview & { selector: Selector; patch: FormatPatch };
@@ -31,21 +34,26 @@ export default function App() {
   const [includeOther, setIncludeOther] = useState(false);
   const [locked, setLocked] = useState(false);
   const [preview, setPreview] = useState<ActivePreview | null>(null);
+  const [rule, setRule] = useState<FormatRule | null>(null);
+  const [rulePreview, setRulePreview] = useState<RulePreview | null>(null);
+  const [bulkTagDraft, setBulkTagDraft] = useState('');
+  const [bulkAction, setBulkAction] = useState<BulkAnnotation['action']>('add_tag');
+  const [bulkRole, setBulkRole] = useState<Role>('body');
   const [current, setCurrent] = useState<string | null>(null);
   const [tagDraft, setTagDraft] = useState('');
-  const [tab, setTab] = useState<'batch' | 'object'>('batch');
+  const [tab, setTab] = useState<'batch' | 'object' | 'rules'>('batch');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [showTags, setShowTags] = useState(true);
   const [onlyMatches, setOnlyMatches] = useState(false);
   const [zoom, setZoom] = useState(100);
-  const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean } | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean; message?: string } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const operationLock = useRef(false);
-  const hasDraft = !!Object.keys(patch).length || !!tagDraft.trim() || !!preview || !!saveName.trim();
+  const hasDraft = !!Object.keys(patch).length || !!tagDraft.trim() || !!preview || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || ruleIsDirty(rule, doc?.rules || []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
-    setDoc(value); setPreview(null);
+    setDoc(value); setPreview(null); setRulePreview(null);
     void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
     try { localStorage.setItem(LAST_PROJECT, value.id); } catch { /* Content is stored by the local service. */ }
   }, []);
@@ -126,8 +134,9 @@ export default function App() {
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.isComposing || pendingSwitch) return;
-      if (event.key === 'Escape' && preview && !busy) {
-        event.preventDefault(); setPreview(null); return;
+      if (event.defaultPrevented) return;
+      if (event.key === 'Escape' && (preview || rulePreview) && !busy) {
+        event.preventDefault(); setPreview(null); setRulePreview(null); return;
       }
       const target = event.target as HTMLElement;
       if (target.matches('input, textarea, select') || target.isContentEditable) return;
@@ -137,11 +146,11 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [history, preview, busy, pendingSwitch]);
+  }, [history, preview, rulePreview, busy, pendingSwitch]);
 
   function changeSelector(value: Selector, explicitAll = false) {
     const next = activateSelection(selectionSession, value, explicitAll);
-    setPreview(null); setMatched([]); setSelectorError(null); setSelectionSession(next); setTab('batch');
+    setPreview(null); setRulePreview(null); setMatched([]); setSelectorError(null); setSelectionSession(next); setTab('batch');
     setMatching(next.active);
     if (!next.active) setOnlyMatches(false);
   }
@@ -154,6 +163,8 @@ export default function App() {
     setFormatTab('paragraph'); setIncludeOther(false); setTab('batch'); setOnlyMatches(false);
     setSelectionSession(emptySelectionSession()); setMatched([]);
     setSaveName(''); setMarking(false); setMarked([]); setSelectorError(null);
+    setRule(null); setRulePreview(null); setBulkTagDraft('');
+    setBulkAction('add_tag'); setBulkRole('body');
   }
   function guardSwitch(action: () => void, objectOnly = false) {
     if (busy) return;
@@ -162,8 +173,8 @@ export default function App() {
   }
   function pickObject(id: string) {
     if (busy) return;
-    if (id === current) { setTab('object'); return; }
-    guardSwitch(() => { setCurrent(id); setTagDraft(''); setTab('object'); }, true);
+    if (id === current) { changePanel('object'); return; }
+    guardSwitch(() => { setCurrent(id); setTagDraft(''); changePanel('object'); }, true);
   }
   function importFile(file?: File) {
     if (file) guardSwitch(() => void run(async () => {
@@ -189,7 +200,58 @@ export default function App() {
     const submitted = scopedPatch(patch, formatTab, includeOther);
     await run(async () => {
       const result = await api.preview(doc, selector, submitted);
+      setRulePreview(null);
       setPreview({ ...result, selector: structuredClone(selector), patch: { ...submitted } });
+    });
+  }
+
+  function changePanel(value: typeof tab) {
+    if (busy) return;
+    setTab(value); setPreview(null); setRulePreview(null);
+  }
+  function formatObject(id: string) {
+    changeSelector({ mode: 'all', conditions: [rangeCondition([id])] });
+  }
+  function editRule(value: FormatRule | null) {
+    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setPreview(null); setTab('rules'); };
+    if (ruleIsDirty(rule, doc?.rules || [])) setPendingSwitch({ action, objectOnly: false, message: '此规则还有未保存的编辑。继续会丢弃规则草稿；批量格式草稿和已保存的内容不受影响。' });
+    else action();
+  }
+  async function previewRule() {
+    if (!doc || !rule) return;
+    const request: RuleAction = { action: 'save', rule: ruleDraft(rule) };
+    await run(async () => {
+      const result = await api.previewRule(doc, request);
+      setPreview(null); setOnlyMatches(false); setRulePreview({ ...result, request });
+    });
+  }
+  async function saveRulePreview() {
+    if (!doc || !rulePreview) return;
+    await run(async () => {
+      acceptDoc(await api.applyRule({ ...doc, revision: rulePreview.revision }, rulePreview.request));
+      setRule(null); setMessage({ text: '持续规则已保存，类别与标签变化后自动重新匹配，可撤销', error: false });
+    });
+  }
+  function changeRule(action: RuleAction) {
+    if (!doc) return;
+    void run(async () => {
+      acceptDoc(await api.applyRule(doc, action));
+      setMessage({ text: '规则已更新，格式已重新计算，可撤销', error: false });
+    });
+  }
+  async function bulkAnnotate(action: BulkAnnotation) {
+    if (!doc || !selectionActive || matching || selectorError || !matched.length) return false;
+    const count = matched.length;
+    return run(async () => {
+      acceptDoc(await api.bulkAnnotate(doc, selector, action));
+      setMessage({ text: `已对原筛选范围 ${count} 段执行标注，持续规则已重新匹配，可撤销`, error: false });
+    });
+  }
+  function clearOverrides(id: string, keys: string[]) {
+    if (!doc) return;
+    void run(async () => {
+      acceptDoc(await api.clearOverrides(doc, id, keys));
+      setMessage({ text: '已清除本项目局部覆盖，恢复规则或原文档格式，可撤销', error: false });
     });
   }
 
@@ -245,17 +307,18 @@ export default function App() {
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
         onDeleteSelector={deleteSavedSelector}
         onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
-      <DocumentCanvas doc={doc} matched={matched} current={tab === 'object' && !preview ? current : null} busy={busy}
-        onPick={pickObject} preview={preview} patch={preview?.patch || {}} onExitPreview={() => setPreview(null)}
-        showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={onlyMatches}
+      <DocumentCanvas doc={doc} matched={tab === 'rules' ? [] : matched} current={tab === 'object' && !preview && !rulePreview ? current : null} busy={busy}
+        onPick={pickObject} onFormat={formatObject} preview={rulePreview || preview} patch={preview?.patch || {}} onExitPreview={() => { setPreview(null); setRulePreview(null); }}
+        showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'rules' && onlyMatches}
         marking={marking} marked={marked} onMarking={() => setMarking(!marking)}
         onMark={id => setMarked(ids => ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id])}
         onClearMarks={() => setMarked([])} onAddRange={addMarkedRange}
-        onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={selectionActive} />
+        onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'rules' && selectionActive} />
       <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
-          <button role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => setTab('batch')}><SlidersHorizontal size={15} />批量操作</button>
-          <button role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => setTab('object')}><Fingerprint size={15} />对象属性</button>
+          <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />批量操作</button>
+          <button disabled={busy} role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => changePanel('object')}><Fingerprint size={15} />对象属性</button>
+          <button disabled={busy} role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'active' : ''} onClick={() => changePanel('rules')}><Layers size={15} />规则</button>
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length}
@@ -263,20 +326,28 @@ export default function App() {
             loading={matching} active={selectionActive} onExit={exitSelection} canResume={previousSelector !== null}
             onResume={() => { if (previousSelector) changeSelector(previousSelector, true); }}
             onStart={() => changeSelector({ mode: 'all', conditions: [{ field: 'role', op: 'is', value: 'body' }] })} />
+          <BulkAnnotations count={matched.length} disabled={busy || matching || !selectionActive || !!selectorError} tags={allTags} draft={bulkTagDraft} onDraft={setBulkTagDraft} onApply={bulkAnnotate} action={bulkAction} onAction={setBulkAction} role={bulkRole} onRole={setBulkRole} />
           <FormatPanel patch={patch} onChange={value => { setPreview(null); setPatch(value); }} preview={preview}
             onPreview={() => void startPreview()} onApply={() => void applyPreview()} onCancel={() => setPreview(null)}
             busy={busy || matching || !selectionActive || !!selectorError} count={matched.length} tab={formatTab}
             onTab={value => { setFormatTab(value); setIncludeOther(false); setPreview(null); }}
             locked={locked} onLock={setLocked} includeOther={includeOther}
             onIncludeOther={value => { setIncludeOther(value); setPreview(null); }} />
-        </fieldset> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={id => changeSelector({ mode: 'all', conditions: [rangeCondition([id])] })} />}</div>
+        </fieldset> : tab === 'rules' ? <RulePanel rules={doc.rules} draft={rule} preview={rulePreview} busy={busy}
+          canUseScope={selectionActive && selectorComplete(selector) && !matching && !selectorError}
+          onCreate={() => editRule(newRule(crypto.randomUUID().replaceAll('-', ''), selector))} onEdit={editRule}
+          onChange={value => { setRule(value); setRulePreview(null); }} onDiscard={() => editRule(null)}
+          onUseScope={() => { if (rule) { setRule({ ...rule, selector: structuredClone(selector) }); setRulePreview(null); } }}
+          onLoadScope={() => { if (rule) changeSelector(structuredClone(rule.selector), true); }}
+          onPreview={() => void previewRule()} onApply={() => void saveRulePreview()} onCancel={() => setRulePreview(null)} onAction={changeRule}
+        /> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={formatObject} onClearOverrides={clearOverrides} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">
       <div><span className="status-dot" /><span>本地运行</span><span className="status-divider" />{doc && <><span>{doc.blocks.length} 个段落</span><span className="status-divider" /><span>{!selectionActive ? '未筛选' : matching ? '正在匹配…' : `筛选匹配 ${matched.length} 段`}</span>{selectionActive && <button disabled={busy} onClick={exitSelection}>退出筛选</button>}</>}</div>
-      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 2A · 选择范围</span></div>
+      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>阶段 2B · 持续规则</span></div>
     </footer>
-    {pendingSwitch && <DraftDialog objectOnly={pendingSwitch.objectOnly} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
+    {pendingSwitch && <DraftDialog objectOnly={pendingSwitch.objectOnly} message={pendingSwitch.message} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
     {message && <div className={`toast ${message.error ? 'error' : ''}`} role={message.error ? 'alert' : 'status'}><span>{message.error ? '!' : <Check size={16} />}</span><p>{message.text}</p><button className="icon-button" onClick={() => setMessage(null)} aria-label="关闭提示"><X size={14} /></button></div>}
   </div>;
 }

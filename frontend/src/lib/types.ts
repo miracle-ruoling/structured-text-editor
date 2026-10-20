@@ -16,19 +16,27 @@ export type Block = {
   editable: boolean; confirmed: boolean; style_id: string; style_name: string; role_source: string;
   format: Format; format_sources: Record<string, string>; mixed: string[]; features: string[];
   overrides: FormatPatch; runs: { text: string; format: Format }[];
+  format_trace: Record<string, FormatLayer[]>;
 };
 export type Layout = { kind: 'paragraph'; id: string } | { kind: 'table'; rows: { span: number; children: Layout[] }[][] } | { kind: 'unsupported'; label: string; children: Layout[] };
 export type DocumentView = {
   id: string; name: string; revision: number; updated_at: string;
   blocks: Block[]; layout: Layout[]; warnings: string[]; undo_label: string | null; redo_label: string | null;
   saved_selectors: SavedSelector[];
+  rules: RuleView[];
 };
 export type RecentProject = { id: string; name: string; updated_at: string; revision: number };
 export type Condition = { key?: string; field: 'role' | 'tag' | 'context' | 'text' | 'ids'; op: 'is' | 'is_not' | 'contains' | 'not_contains'; value: string; ids?: string[] };
 export type Selector = { mode: 'all' | 'any' | 'expression'; conditions: Condition[]; expression?: string };
 export type SavedSelector = { id: string; name: string; selector: Selector };
 export type AnnotationPatch = { role?: Role; tags?: string[]; reset_role?: boolean };
-export type Preview = { revision: number; ids: string[]; changes: { id: string; text: string; before: Format; after: FormatPatch }[] };
+export type Preview = { revision: number; ids: string[]; changes: { id: string; text: string; before: Format; after: Format }[]; after_blocks?: Block[] };
+export type FormatLayer = { kind: 'source' | 'rule' | 'local'; key: string; label: string; value: unknown; mixed?: boolean; rule_id?: string };
+export type FormatRule = SavedSelector & { patch: FormatPatch; enabled: boolean };
+export type RuleView = FormatRule & { matched_count: number; effective_count: number };
+export type RuleAction = { action: 'save'; rule: FormatRule } | { action: 'delete'; id: string } | { action: 'toggle'; id: string; enabled: boolean } | { action: 'move'; id: string; position: number };
+export type RulePreview = Preview & { label: string; rules: RuleView[]; request: RuleAction };
+export type BulkAnnotation = { action: 'add_tag' | 'remove_tag'; tag: string } | { action: 'set_role'; role: Role } | { action: 'reset_role' };
 
 export const bodySelector: Selector = { mode: 'all', conditions: [
   { field: 'role', op: 'is', value: 'body' },

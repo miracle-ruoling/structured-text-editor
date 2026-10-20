@@ -12,9 +12,12 @@ from .docx.writer import export_docx
 from .domain.commands import ConflictError
 from .domain.models import (
     AnnotationRequest,
+    BulkAnnotationRequest,
+    ClearOverridesRequest,
     DeleteSelectorRequest,
     FormatRequest,
     RevisionRequest,
+    RuleRequest,
     SaveSelectorRequest,
     Selector,
 )
@@ -150,11 +153,37 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             },
         )
 
+    @app.post("/api/projects/{identity}/rules/preview")
+    def preview_rule(identity: str, operation: RuleRequest):
+        with store.lock:
+            return store.preview_rule(store.load(identity), operation)
+
+    @app.post("/api/projects/{identity}/rules/apply")
+    def change_rule(identity: str, operation: RuleRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.change_rule(project, operation)
+            return store.view(project)
+
+    @app.post("/api/projects/{identity}/overrides/clear")
+    def clear_overrides(identity: str, operation: ClearOverridesRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.clear_overrides(project, operation)
+            return store.view(project)
+
+    @app.post("/api/projects/{identity}/annotations/bulk")
+    def bulk_annotate(identity: str, operation: BulkAnnotationRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.bulk_annotate(project, operation)
+            return store.view(project)
+
     @app.get("/api/projects/{identity}/export/docx")
     def export_word(identity: str):
         with store.lock:
             project = store.load(identity)
-            content = export_docx(store.source(identity), project.annotations)
+            content = export_docx(store.source(identity), store.export_annotations(project))
             return download(
                 content,
                 Path(project.name).stem + "_文序.docx",
