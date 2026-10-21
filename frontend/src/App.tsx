@@ -390,6 +390,21 @@ export default function App() {
     finally { operationLock.current = false; setBusy(false); }
   }, [acceptDoc]);
 
+  function enableTextEditing() {
+    if (!doc) return;
+    void run(async () => {
+      const value = await api.enableText(doc);
+      acceptDoc(value);
+      const target = value.blocks.find(block => block.id === current && block.text_editable)
+        || value.blocks.find(block => block.text_editable);
+      if (target) {
+        // Preserve format/template drafts while leaving their read-only preview for writing.
+        setTab('object'); setOnlyMatches(false); setCurrent(target.id);
+        setEditorFocus({ id: target.id, offset: 0, choose: false, token: Date.now() });
+      } else setMessage({ text: '已启用文字编辑，但当前文档各段均包含暂不支持改字的复杂对象。', error: true });
+    });
+  }
+
   const allTags = useMemo(() => [...new Set(doc?.blocks.flatMap(b => b.tags) || [])], [doc]);
   const currentBlock = doc?.blocks.find(b => b.id === current) || null;
   return <div className="app-shell">
@@ -397,7 +412,7 @@ export default function App() {
       <div className="brand"><div className="brand-mark"><span /><span /><span /></div><strong>文序</strong><span className="brand-caption">结构化文档工作台</span></div>
       <div className="header-actions">
         <button className="secondary" disabled={busy || textPending} onClick={() => guardSwitch(() => void run(async () => newDocument(await api.blank())))}>新建文档</button>
-        {doc && !doc.text_editing && <button className="secondary" disabled={busy || textPending} onClick={() => void run(async () => acceptDoc(await api.enableText(doc)))}>启用文字编辑</button>}
+        {doc && !doc.text_editing && <button className="secondary" disabled={busy || textPending} onClick={enableTextEditing}>启用文字编辑</button>}
         {doc?.text_editing && <span className="editing-mode">文字编辑已启用</span>}
         <span className="save-status">{busy ? <><LoaderCircle size={13} className="spin" />处理中</> : <><CheckCheck size={14} />{textPending ? (textSaving ? '正在保存文字' : '文字尚未保存') : hasDraft ? '已保存 · 有未提交草稿' : '已保存到本机'}</>}</span>
         <input ref={inputRef} type="file" hidden accept=".docx,.sdoc,.json" onChange={e => { importFile(e.target.files?.[0]); e.target.value = ''; }} />

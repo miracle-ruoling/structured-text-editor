@@ -158,3 +158,69 @@ def test_replace_keeps_unedited_run_formatting(client, source):
     runs = output.by_id['p1'].findall(q('r'))
     assert runs[0].find(f'{q("rPr")}/{q("sz")}').get(q('val')) == '40'
     assert runs[-1].find(f'{q("rPr")}/{q("sz")}').get(q('val')) == '22'
+
+
+@pytest.mark.parametrize('marker_pair', [('permStart', 'permEnd'), ('bookmarkStart', 'bookmarkEnd'), ('proofErr', 'proofErr')])
+def test_range_markers_allow_typing_and_survive_split_join_undo(client, source, marker_pair):
+    from lxml import etree
+    from structured_editor.docx.editing import paragraph_text, text_markers
+    from structured_editor.docx.xml import q
+    package = DocxPackage(source)
+    paragraph = package.by_id['p1']
+    # Common Word metadata around ordinary text must not lock the whole paragraph.
+    start = etree.Element(q(marker_pair[0]), {q('id'): '42', q('name'): 'range'})
+    end = etree.Element(q(marker_pair[1]), {q('id'): '42'})
+    if marker_pair[0] == 'permStart':
+        start.attrib.pop(q('name'))
+        start.set(q('edGrp'), 'everyone')
+    if marker_pair[0] == 'proofErr':
+        start.attrib.clear()
+        start.set(q('type'), 'spellStart')
+        end.attrib.clear()
+        end.set(q('type'), 'spellEnd')
+    paragraph.insert(1, start)
+    paragraph.append(end)
+    original = package.replace_document()
+    view = client.post('/api/projects/import', files={'file': ('markers.docx', original)}).json()
+    assert not view['text_editing']
+    view = client.post(f'/api/projects/{view["id"]}/enable-text', json={'revision': view['revision']}).json()
+    assert view['blocks'][0]['text_editable']
+    view = edit(client, view, action='replace', id='p1', text='范围内的新正文').json()
+    expected_markers = [(start.tag, dict(start.attrib)), (end.tag, dict(end.attrib))]
+
+    def exported():
+        return DocxPackage(client.get(f'/api/projects/{view["id"]}/export/docx').content)
+
+    changed = exported()
+    assert paragraph_text(changed.by_id['p1']) == '范围内的新正文'
+    assert [(node.tag, dict(node.attrib)) for _, node in text_markers(changed.by_id['p1'])] == expected_markers
+    assert [pos for pos, _ in text_markers(changed.by_id['p1'])] == [0, 7]
+    assert edit(client, view, action='delete', id='p1').status_code == 400
+    view = edit(client, view, action='split', id='p1', offset=3).json()
+    new_id = view['edit_focus']
+    split = exported()
+    assert [paragraph_text(p) for p in split.paragraphs[:2]] == ['范围内', '的新正文']
+    assert [(node.tag, dict(node.attrib)) for p in split.paragraphs[:2] for _, node in text_markers(p)] == expected_markers
+    view = edit(client, view, action='join', id=new_id).json()
+    assert paragraph_text(exported().by_id['p1']) == '范围内的新正文'
+    assert [(node.tag, dict(node.attrib)) for _, node in text_markers(exported().by_id['p1'])] == expected_markers
+    view = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': view['revision']}).json()
+    assert len(view['blocks']) == len(package.paragraphs) + 1
+    assert client.app.state.store.source(view['id']) == original
+
+
+def test_rendered_page_hint_does_not_lock_text_or_disappear(client, source):
+    from lxml import etree
+    from structured_editor.docx.editing import paragraph_text
+    from structured_editor.docx.xml import q
+    package = DocxPackage(source)
+    run = package.by_id['p1'].find(q('r'))
+    hint = etree.SubElement(run, q('lastRenderedPageBreak'))
+    assert hint is not None
+    view = client.post('/api/projects/import', files={'file': ('page-hint.docx', package.replace_document())}).json()
+    view = client.post(f'/api/projects/{view["id"]}/enable-text', json={'revision': view['revision']}).json()
+    assert view['blocks'][0]['text_editable']
+    view = edit(client, view, action='replace', id='p1', text='分页提示不妨碍写作').json()
+    output = DocxPackage(client.get(f'/api/projects/{view["id"]}/export/docx').content)
+    assert paragraph_text(output.by_id['p1']) == '分页提示不妨碍写作'
+    assert len(output.by_id['p1'].findall(f'.//{q("lastRenderedPageBreak")}')) == 1

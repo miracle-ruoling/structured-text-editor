@@ -10,6 +10,8 @@ from .reader import is_editable, project_document
 from .writer import export_docx
 from .xml import NS, own_runs, parse, q, run_text
 
+TEXT_MARKERS = {q(name) for name in ('permStart', 'permEnd', 'bookmarkStart', 'bookmarkEnd', 'proofErr')}
+
 
 def package_for(source: bytes, content: EditableDocument | None):
     package = DocxPackage(source)
@@ -39,13 +41,13 @@ def snapshot(package):
 def text_editable(paragraph):
     if not is_editable(paragraph):
         return False
-    # Only plain text runs can be changed; anchors, fields and embedded objects stay intact.
+    # Range metadata is preserved at text offsets; fields and embedded objects remain read-only.
     if paragraph.find('w:pPr/w:sectPr', NS) is not None:
         return False
     for child in paragraph:
-        if child.tag == q('pPr'):
+        if child.tag == q('pPr') or child.tag in TEXT_MARKERS:
             continue
-        if child.tag != q('r') or any(node.tag not in {q('rPr'), q('t'), q('tab'), q('br'), q('cr')} for node in child):
+        if child.tag != q('r') or any(node.tag not in {q('rPr'), q('t'), q('tab'), q('br'), q('cr'), q('lastRenderedPageBreak')} for node in child):
             return False
         if any(node.get(q('type')) not in (None, 'textWrapping') for node in child if node.tag == q('br')):
             return False
@@ -84,6 +86,41 @@ def slice_runs(paragraph, start, end):
     return runs
 
 
+def text_markers(paragraph):
+    markers, offset = [], 0
+    for child in paragraph:
+        if child.tag in TEXT_MARKERS:
+            markers.append((offset, deepcopy(child)))
+        elif child.tag == q('r'):
+            for node in child:
+                if node.tag == q('lastRenderedPageBreak'):
+                    run = etree.Element(q('r'))
+                    props = child.find(q('rPr'))
+                    if props is not None:
+                        run.append(deepcopy(props))
+                    run.append(deepcopy(node))
+                    markers.append((offset, run))
+                elif node.tag == q('t'):
+                    offset += len(node.text or '')
+                elif node.tag in {q('tab'), q('br'), q('cr')}:
+                    offset += 1
+    return markers
+
+
+def install_text(paragraph, runs, markers):
+    holder = etree.Element(q('p'))
+    holder.extend(runs)
+    for child in list(paragraph):
+        if child.tag != q('pPr'):
+            paragraph.remove(child)
+    start = 0
+    for offset, marker in markers:
+        paragraph.extend(slice_runs(holder, start, offset))
+        paragraph.append(marker)
+        start = offset
+    paragraph.extend(slice_runs(holder, start, len(paragraph_text(holder))))
+
+
 def replace_text(paragraph, text):
     old = paragraph_text(paragraph)
     if old == text:
@@ -103,12 +140,19 @@ def replace_text(paragraph, text):
         pos += len(run_text(run))
         if pos >= prefix:
             break
-    for child in list(paragraph):
-        if child.tag != q('pPr'):
-            paragraph.remove(child)
-    paragraph.extend(before)
-    append_text(paragraph, text[prefix:len(text) - suffix if suffix else len(text)], style)
-    paragraph.extend(after)
+    middle = etree.Element(q('p'))
+    append_text(middle, text[prefix:len(text) - suffix if suffix else len(text)], style)
+    old_end, new_end = len(old) - suffix, len(text) - suffix
+
+    def mapped(offset):
+        if offset <= prefix:
+            return offset
+        if offset >= old_end:
+            return offset + len(text) - len(old)
+        return prefix + (offset - prefix) * (new_end - prefix) // (old_end - prefix)
+
+    install_text(paragraph, [*before, *middle, *after],
+                 [(mapped(offset), marker) for offset, marker in text_markers(paragraph)])
 
 
 def set_category(paragraph, role, level):
@@ -187,8 +231,10 @@ def edit_document(source, project, operation: TextEditRequest):
         if len(package.ids) >= 20000:
             raise ValueError('最多支持 20,000 段')
         right = etree.Element(q('p'))
-        right.extend(slice_runs(paragraph, offset, len(text)))
-        replace_text(paragraph, text[:offset])
+        markers = text_markers(paragraph)
+        left_runs, right_runs = slice_runs(paragraph, 0, offset), slice_runs(paragraph, offset, len(text))
+        install_text(right, right_runs, [(pos - offset, marker) for pos, marker in markers if pos >= offset])
+        install_text(paragraph, left_runs, [(pos, marker) for pos, marker in markers if pos < offset])
         paragraph.addnext(right)
         focus = f'p{project.next_paragraph}'
         project.next_paragraph += 1
@@ -204,10 +250,12 @@ def edit_document(source, project, operation: TextEditRequest):
         prev_annotation = project.annotations.get(focus)
         if prev_annotation and prev_annotation.sizes:
             raise ValueError('前一段有逐字字号覆盖，请先清除该覆盖再合并')
-        previous.extend(deepcopy(list(paragraph.findall(q('r')))))
+        previous.extend(deepcopy([child for child in paragraph if child.tag != q('pPr')]))
         paragraph.getparent().remove(paragraph)
         project.annotations.pop(operation.id, None)
     elif operation.action == 'delete':
+        if text_markers(paragraph):
+            raise ValueError('该段包含范围标记，请清空文字或合并段落以保留标记')
         parent = paragraph.getparent()
         if len(parent.findall(q('p'))) <= 1:
             raise ValueError('主体或单元格至少保留一个段落')

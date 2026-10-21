@@ -27,6 +27,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
   const [error, setError] = useState('');
   const [acting, setActing] = useState(false);
   const actingRef = useRef(false);
+  const focusedToken = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (draft.current !== persisted.current || pending.current) return;
@@ -49,10 +50,11 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
     }
   }, [block.text, block.runs]);
   useEffect(() => {
-    if (editorFocus?.id !== block.id || !ref.current) return;
+    if (busy || acting || editorFocus?.id !== block.id || !ref.current || focusedToken.current === editorFocus.token) return;
     focusText(ref.current, editorFocus.offset);
+    focusedToken.current = editorFocus.token;
     setChooser(editorFocus.choose); setSelected(0);
-  }, [editorFocus, block.id]);
+  }, [editorFocus, block.id, busy, acting]);
   useEffect(() => () => { clearTimeout(timer.current); report.current(block.id, false, false); }, [block.id]);
 
   async function save(): Promise<boolean> {

@@ -298,3 +298,5 @@ HTTP 入口：`/api/templates` 列表，`/save`、`/delete`、`/restore`、`/imp
 - 编辑模式 Word 导出用快照重建当前 document.xml，按稳定 ID 映射格式覆盖；跳过 source-vs-output 文字保留审计。未启用模式继续原检查。项目导出统一 .sdoc，带源包与 v6 历史，导入逐历史校验 annotation/run 定位与 ID，分配器推进到所有历史最大 ID 之后。
 - data/native 旧文档首次列项目时迁入统一项目，使用 native_origin 防止重复，保留旧文件；.wnative.json 可从统一导入入口导入。迁移保留正文节点映射及内容历史，不映射旧名称撤销。旧 /api/native 仅兼容，不作为当前界面入口。
 - 当前编辑是逐段文本，不是复杂 Word 全量编辑；复杂段落只读、粘贴纯文本且段内换行、跨段选区未实现。旧 3A Markdown 标题输入暂由类别容器替代。真实 IME 与长文档性能未实际验收。
+
+- 2026-10-21 非空文档输入修复：permStart/permEnd、bookmarkStart/bookmarkEnd、proofErr 与 run 内 lastRenderedPageBreak 不作为文字锁定依据。editing.py 把标记记录为文字偏移，保留属性与顺序；公共前后缀范围不变，替换范围内按新文本长度单调映射；拆分把边界及其后标记放入新段，合并恢复所有非 pPr 子节点。整段删除若含标记则拒绝。启用编辑退出预览而不丢草稿，聚焦当前/首个可编辑段落，焦点 token 等待 busy/acting 结束后只执行一次。
