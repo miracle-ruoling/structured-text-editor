@@ -27,6 +27,7 @@ export const api = {
   get: (id: string) => request<DocumentView>(`/projects/${id}`),
   import: (file: File) => { const form = new FormData(); form.append('file', file); return request<DocumentView>('/projects/import', undefined, form); },
   select: (id: string, selector: Selector) => request<{ ids: string[]; revision: number }>(`/projects/${id}/select`, selector),
+  adjustSelection: (doc: DocumentView, selector: Selector, changes: { id: string; selected: boolean }[]) => request<{ ids: string[]; revision: number; selector: Selector }>(`/projects/${doc.id}/selection-adjust`, { revision: doc.revision, selector, changes }),
   preview: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null, signal?: AbortSignal) => request<Preview>(`/projects/${doc.id}/preview?compact=true`, { revision: doc.revision, selector, patch, size_change }, undefined, signal),
   apply: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null) => request<DocumentView>(`/projects/${doc.id}/apply`, { revision: doc.revision, selector, patch, size_change }),
   report: (doc: DocumentView) => request<ExportReport>(`/projects/${doc.id}/export/report`),

@@ -8,7 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .docx.package import MAX_UPLOAD
-from .domain.commands import ConflictError
+from .domain.commands import ConflictError, check_revision
 from .domain.models import (
     AnnotationRequest,
     BulkAnnotationRequest,
@@ -18,8 +18,10 @@ from .domain.models import (
     RevisionRequest,
     RuleRequest,
     SaveSelectorRequest,
+    SelectionAdjustment,
     Selector,
 )
+from .domain.point_selection import adjust_selection
 from .domain.selectors import select
 from .storage import ProjectStore
 
@@ -95,6 +97,14 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         with store.lock:
             project = store.load(identity)
             return {"revision": project.revision, "ids": select(store.view(project)["blocks"], selector)}
+
+    @app.post("/api/projects/{identity}/selection-adjust")
+    def adjust_points(identity: str, operation: SelectionAdjustment):
+        with store.lock:
+            project = store.load(identity)
+            check_revision(project, operation.revision)
+            selector, ids = adjust_selection(store.view(project)["blocks"], operation.selector, operation.changes)
+            return {"revision": project.revision, "selector": selector.model_dump(exclude_none=True), "ids": ids}
 
     @app.post("/api/projects/{identity}/preview")
     def preview(identity: str, operation: FormatRequest, compact: bool = False):

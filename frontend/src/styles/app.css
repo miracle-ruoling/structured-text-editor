@@ -325,11 +325,11 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .selector-error { border: 1px solid #eed6cc; background: #fff8f4; border-radius: 5px; color: #ac6d51; font-size: 11px; line-height: 1.7; padding: 9px; overflow-wrap: anywhere; }
 .condition-field-label, .range-count { display: flex; align-items: center; min-height: 31px; padding: 0 7px; font-size: 11px; }
 .condition-field-label { color: #718478; }
-.range-count { min-width: 0; border: 1px solid #e7dfc9; border-radius: 5px; color: #938052; background: #fffdf6; white-space: nowrap; }
-.range-details { margin: 6px 0 5px; padding: 7px 9px; border-radius: 5px; color: #938052; background: #faf9f4; font-size: 10px; line-height: 1.8; }
-.range-details summary { cursor: pointer; }
-.range-details p { overflow-wrap: anywhere; max-height: 90px; overflow: auto; margin: 7px 0; }
-.range-details > span { color: #9a998b; }
+.range-input { min-width: 0; width: 100%; font-variant-numeric: tabular-nums; }
+.range-input::placeholder { color: #88958c; }
+.range-input-wrap { position: relative; display: block; min-width: 0; }
+.range-input-tooltip { display: none; position: absolute; z-index: 20; top: 100%; right: 0; width: min(340px, 75vw); max-height: 130px; overflow: auto; overflow-wrap: anywhere; white-space: normal; padding: 8px 10px; border: 1px solid #cadbd0; border-radius: 5px; color: #355847; background: #fff; box-shadow: 0 5px 16px #263b2b24; font: 11px/1.7 ui-monospace, Consolas, monospace; user-select: text; }
+.range-input-wrap:hover .range-input-tooltip, .range-input-wrap:focus-within .range-input-tooltip { display: block; }
 .save-selector { display: flex; gap: 6px; margin-top: 13px; }
 .save-selector input { font-size: 11px; }
 .save-selector button { width: 34px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 5px; }

@@ -14,7 +14,8 @@ import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, Forma
 import { selectorComplete } from './lib/workspace';
 import { emptyFormatDraft } from './lib/formatDraft';
 import { useFormatPreview } from './lib/useFormatPreview';
-import { activateSelection, emptySelectionSession, endPointerGesture, leaveSelection, selectParagraph } from './lib/selection';
+import { useSelection } from './lib/useSelection';
+import { activateSelection, emptySelectionSession, leaveSelection, parseParagraphIds, pointIntent, selectParagraph } from './lib/selection';
 import type { SelectionSession } from './lib/selection';
 import { newRule, ruleDraft, ruleIsDirty } from './lib/rules';
 
@@ -25,9 +26,6 @@ export default function App() {
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [selectionSession, setSelectionSession] = useState(emptySelectionSession);
   const { selector, active: selectionActive, previous: previousSelector } = selectionSession;
-  const [matched, setMatched] = useState<string[]>([]);
-  const [matching, setMatching] = useState(false);
-  const [selectorError, setSelectorError] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
   const [formatDraft, setFormatDraft] = useState(emptyFormatDraft);
   const { patch, sizeChange } = formatDraft;
@@ -47,26 +45,23 @@ export default function App() {
   const [onlyMatches, setOnlyMatches] = useState(false);
   const [zoom, setZoom] = useState(100);
   const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean; message?: string } | null>(null);
+  const [rangeInputs, setRangeInputs] = useState<Record<string, string>>({});
+  const [rangeError, setRangeError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const operationLock = useRef(false);
-  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || ruleIsDirty(rule, doc?.rules || []);
+  const rangeDirty = Object.keys(rangeInputs).length > 0;
+  const acceptResolvedSelection = useCallback((expected: SelectionSession, next: SelectionSession) => {
+    setSelectionSession(current => current === expected ? next : current);
+  }, []);
+  const selection = useSelection(doc, selectionSession, rangeDirty, acceptResolvedSelection);
+  const { ids: matched, matching, error: selectionError } = selection;
+  const selectorError = rangeError || (rangeDirty ? '段落编号尚未确认，请按回车或移开焦点完成。' : selectionError);
+  // An empty range input is still an unfinished edit and must be protected from document switches.
+  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || rangeDirty || ruleIsDirty(rule, doc?.rules || []);
 
   const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
   const preview = live.preview;
   const clearFormatDraft = useCallback(() => { setFormatDraft(emptyFormatDraft()); }, []);
-
-  useEffect(() => {
-    const finish = () => setSelectionSession(endPointerGesture);
-    const release = (event: KeyboardEvent) => { if (event.key === 'Control' || event.key === 'Meta') finish(); };
-    const visibility = () => { if (document.hidden) finish(); };
-    window.addEventListener('keyup', release);
-    window.addEventListener('blur', finish);
-    document.addEventListener('visibilitychange', visibility);
-    return () => {
-      window.removeEventListener('keyup', release); window.removeEventListener('blur', finish);
-      document.removeEventListener('visibilitychange', visibility);
-    };
-  }, []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
     setDoc(value); setRulePreview(null); setReport(null);
@@ -92,25 +87,6 @@ export default function App() {
     void start();
     return () => { active = false; };
   }, [acceptDoc]);
-
-  useEffect(() => {
-    setSelectorError(null);
-    if (!doc || !selectionActive || !selectorComplete(selector)) { setMatched([]); setMatching(false); return; }
-    let active = true;
-    setMatching(true); setMatched([]);
-    const timer = setTimeout(() => {
-      api.select(doc.id, selector).then(async result => {
-        if (!active) return;
-        if (result.revision !== doc.revision) {
-          const updated = await api.get(doc.id);
-          if (active) acceptDoc(updated);
-        } else setMatched(result.ids);
-      }).catch(error => {
-        if (active) { setMatched([]); setSelectorError(error.message); }
-      }).finally(() => { if (active) setMatching(false); });
-    }, 120);
-    return () => { active = false; clearTimeout(timer); };
-  }, [doc, selector, selectionActive, acceptDoc]);
 
   useEffect(() => {
     if (!message || message.error) return;
@@ -165,22 +141,40 @@ export default function App() {
   }, [history, patch, sizeChange, tab, rulePreview, busy, pendingSwitch, report, clearFormatDraft]);
 
   function changeSelector(value: Selector, explicitAll = false) {
+    setRangeError(null);
+    const retained = new Set(value.conditions.map((condition, index) => condition.key || String(index)));
+    setRangeInputs(current => Object.fromEntries(Object.entries(current).filter(([key]) => retained.has(key))));
     const next = activateSelection(selectionSession, value, explicitAll);
     acceptSelection(next);
   }
+  function updateRangeDraft(key: string, value: string) {
+    setRangeError(null);
+    setRangeInputs(current => ({ ...current, [key]: value }));
+  }
+  function commitRange(index: number, key: string) {
+    if (!doc) return;
+    const raw = rangeInputs[key];
+    if (raw == null) return;
+    const editable = new Set(doc.blocks.filter(block => block.editable).map(block => block.id));
+    const parsed = parseParagraphIds(raw, editable);
+    if (!parsed.ids) { setRangeError(parsed.error || '段落编号无效。'); return; }
+    const next: Selector = { ...selector, conditions: selector.conditions.map((condition, item) => item === index ? { ...condition, ids: parsed.ids } : condition) };
+    setRangeInputs(current => { const copy = { ...current }; delete copy[key]; return copy; });
+    changeSelector(next);
+  }
   function acceptSelection(next: SelectionSession) {
-    setRulePreview(null); setMatched([]); setSelectorError(null); setSelectionSession(next); setTab('batch');
-    setMatching(next.active);
+    setRulePreview(null); setSelectionSession(next); setTab('batch');
     if (!next.active) setOnlyMatches(false);
   }
   function exitSelection() {
-    setSelectionSession(leaveSelection(selectionSession)); setMatched([]); setMatching(false);
-    setSelectorError(null); setOnlyMatches(false);
+    setSelectionSession(leaveSelection(selectionSession));
+    setOnlyMatches(false); setRangeInputs({}); setRangeError(null);
   }
   function newDocument(document: DocumentView) {
     acceptDoc(document); setCurrent(null); setTagDraft(''); clearFormatDraft(); setCompare(false); setTab('batch'); setOnlyMatches(false);
-    setSelectionSession(emptySelectionSession()); setMatched([]);
-    setSaveName(''); setSelectorError(null);
+    setSelectionSession(emptySelectionSession());
+    setRangeInputs({}); setRangeError(null);
+    setSaveName('');
     setRule(null); setRulePreview(null); setBulkTagDraft('');
     setBulkAction('add_tag'); setBulkRole('body');
   }
@@ -194,24 +188,27 @@ export default function App() {
     if (id === current) { changePanel('object'); return; }
     guardSwitch(() => { setCurrent(id); setTagDraft(''); changePanel('object'); }, true);
   }
-  function pickParagraph(id: string, extend = false, independentGesture = false) {
+  function pickParagraph(id: string, toggle = false) {
     if (busy || !doc) return;
     const block = doc.blocks.find(item => item.id === id);
     if (!block) return;
-    const isolated = independentGesture || (id !== current && !!tagDraft.trim());
     const action = () => {
       setCurrent(id); if (id !== current) setTagDraft('');
       if (!block.editable) {
-        setSelectionSession(endPointerGesture);
         if (!selectionActive) changePanel('object');
         return;
       }
-      try {
-        const base = isolated ? endPointerGesture(selectionSession) : selectionSession;
-        const next = selectParagraph(base, id, extend);
-        if (next.selector !== selectionSession.selector) acceptSelection(isolated ? endPointerGesture(next) : next);
-        else setSelectionSession(next);
-      } catch (error) { setMessage({ text: (error as Error).message, error: true }); }
+      if (rangeDirty) {
+        setMessage({ text: '请先完成或取消段落编号输入，再点选调整范围。', error: true }); return;
+      }
+      if (selectionActive && !selectionSession.direct) {
+        if (!toggle) return;
+        if (!selection.canToggle) {
+          setMessage({ text: selectorError || '正在匹配当前条件，请稍候再点选。', error: true }); return;
+        }
+        const base = selectionError ? { ...selectionSession, pendingChanges: [] } : selectionSession;
+        acceptSelection(pointIntent(base, id, !matched.includes(id)));
+      } else acceptSelection(selectParagraph(selectionSession, id, toggle));
     };
     if (id === current) action(); else guardSwitch(action, true);
   }
@@ -243,7 +240,7 @@ export default function App() {
   }
   function changePanel(value: typeof tab) {
     if (busy) return;
-    setTab(value); setRulePreview(null); setSelectionSession(endPointerGesture);
+    setTab(value); setRulePreview(null);
   }
   function formatObject(id: string) {
     if (busy || !doc?.blocks.some(block => block.id === id && block.editable)) return;
@@ -254,7 +251,7 @@ export default function App() {
     if (id === current) action(); else guardSwitch(action, true);
   }
   function editRule(value: FormatRule | null) {
-    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setTab('rules'); setSelectionSession(endPointerGesture); };
+    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setTab('rules'); };
     if (ruleIsDirty(rule, doc?.rules || [])) setPendingSwitch({ action, objectOnly: false, message: '此规则还有未保存的编辑。继续会丢弃规则草稿；批量格式草稿和已保存的内容不受影响。' });
     else action();
   }
@@ -342,7 +339,7 @@ export default function App() {
         onDeleteSelector={deleteSavedSelector}
         onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
       <DocumentCanvas doc={doc} matched={tab === 'rules' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
-        onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true, true)} onFormat={formatObject} preview={rulePreview || preview} patch={{}} livePreview={tab === 'batch'} previewPending={live.pending} previewError={live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (rulePreview) setRulePreview(null); else clearFormatDraft(); }}
+        onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true)} onFormat={formatObject} preview={rulePreview || preview} patch={{}} livePreview={tab === 'batch'} previewPending={live.pending} previewError={live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (rulePreview) setRulePreview(null); else clearFormatDraft(); }}
         showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'rules' && onlyMatches}
         onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'rules' && selectionActive} />
       <aside className="inspector">
@@ -353,6 +350,7 @@ export default function App() {
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
+            rangeInputs={rangeInputs} onRangeDraft={updateRangeDraft} onRangeCommit={commitRange}
             error={selectorError} direct={selectionSession.direct} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
             loading={matching} active={selectionActive} onExit={exitSelection} canResume={previousSelector !== null}
             onResume={() => { if (previousSelector) changeSelector(previousSelector, true); }}

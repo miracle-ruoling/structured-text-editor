@@ -116,6 +116,17 @@ class Selector(Model):
         return self
 
 
+class PointChange(Model):
+    id: str = Field(pattern=r"^p[1-9][0-9]*$")
+    selected: bool
+
+
+class SelectionAdjustment(Model):
+    revision: int = Field(ge=0)
+    selector: Selector
+    changes: list[PointChange] = Field(min_length=1, max_length=20000)
+
+
 FontSize = Annotated[float, Field(ge=1, le=200, multiple_of=0.5)]
 
 

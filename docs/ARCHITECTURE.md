@@ -25,6 +25,7 @@
 ## 2. 文件与模块
 
 - `domain/models.py`：Pydantic 边界模型；字段白名单、单位与范围、选择器树、标注和历史快照。
+- `domain/point_selection.py`：只读点选增删，将意图转换为现有选择器；保留其他段落的命中语义。
 - `domain/selectors.py`：唯一的筛选求值实现，供高亮、预览、提交共用。不可编辑对象永不参与操作。
 - `domain/rules.py`：纯格式投影、规则变更验证、逐属性来源与统计；不读文件、不拼 XML。
 - `domain/commands.py`：revision 校验、状态提交、撤销与重做；不做文件 I/O。
@@ -79,9 +80,9 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 }
 ```
 
-`all` 是交集、`any` 是并集。role/tag/context/ids/chapter/section 支持 is/is_not；text 另支持 contains/not_contains，文本匹配不区分大小写。标签匹配完整标签而非子串。空 all 选所有可编辑段落，空 any 无匹配。API 保留最多 5 层嵌套；UI 使用条件列表和高级表达式，命名筛选不接受嵌套 JSON 分组。前端以 selectionSession 管理当前条件、启用状态及上次退出的恢复快照：简单模式清空条件/退出筛选进入未筛选，不发送筛选请求；只有显式「全部内容」用空 all 表达全选。空标签/文字/框选/表达式在补全前不发请求。
+`all` 是交集、`any` 是并集。role/tag/context/ids/chapter/section 支持 is/is_not；text 另支持 contains/not_contains，文本匹配不区分大小写。标签匹配完整标签而非子串。空 all 选所有可编辑段落，空 any 无匹配。API 保留最多 5 层嵌套；UI 使用条件列表和高级表达式，命名筛选不接受嵌套 JSON 分组。前端以 selectionSession 管理当前条件、启用状态及上次退出的恢复快照：简单模式清空条件/退出筛选进入未筛选，不发送筛选请求；只有显式「全部内容」用空 all 表达全选。空标签/文字/点选编号/表达式在补全前不发请求；Ctrl 取消最后一个直接点选保留空 OR，表示零命中。
 
-后端返回命中 ID。前端条件变更后防抖 120ms 请求，过期响应忽略；格式预览和提交直接使用同一后端逻辑，避免两套选择器语义。
+后端返回命中 ID。前端条件变更后防抖 70ms 串行请求，旧命中暂作视觉参照，过期响应忽略；格式预览和提交直接使用同一后端逻辑，避免两套选择器语义。
 
 ## 5. 格式覆盖及导出
 
@@ -114,6 +115,7 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 | POST | /api/projects/import | 导入 DOCX 或项目包 |
 | GET | /api/projects/{id} | 项目投影 |
 | POST | /api/projects/{id}/select | 统一筛选 |
+| POST | /api/projects/{id}/selection-adjust | 只读点选增删，检查 revision，返回新选择器及命中 |
 | POST | /api/projects/{id}/preview | 只读预览 |
 | POST | /api/projects/{id}/apply | 应用格式事务 |
 | POST | /api/projects/{id}/annotate | 手工分类/标签事务 |
@@ -150,8 +152,8 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 
 - `domain/expressions.py`：只解析 `$代号`、AND/OR/NOT 和括号；优先级 NOT > AND > OR。最多 2000 字符、256 token、32 层，缓存有限。无 eval。后端对失效引用/重复代号/空条件报错，错误不会降级为全选。
 - `Selector(mode="expression")` 的 conditions 是带 key 的叶子列表，expression 保存关系。`domain/selectors.py` 统一编译为谓词，ID 范围先变为集合，避免逐段线性搜索长 ID 列表。匹配、预览、提交均排除只读对象。
-- `frontend/src/lib/selection.ts`：给条件分配稳定代号；删行后其他代号不变，新条件不接管表达式尚在引用的缺失代号；显式范围复制为快照。前端仅做输入状态和引用提示，真值求值统一走后端。
-- App 中 current 是检查焦点，marked 是复选框临时集合，selector 是实际批量范围。三者独立。“加入筛选条件”复制 ids 快照；已有快照无更新/字段切换入口，需要删除后重新加入；“仅调整此段”替换为一个 ID 条件并进入现有格式面板。
+- `frontend/src/lib/selection.ts`：给条件分配稳定代号；删行后其他代号不变，新条件不接管表达式尚在引用的缺失代号；F1 后点选范围为可编辑编号条件。前端仅做输入状态和引用提示，真值求值统一走后端。
+- 2A 曾用 marked 复选集合复制不可变 ids 快照；F1 已移除该集合，改为直接点选和可编辑编号条件，current 仍是独立查看焦点。现行语义见第 16 节；“仅调整此段”仍替换为一个 ID 条件并进入格式面板。
 - 命名筛选最多 50 个，名称最多 60 字符且不重名，保存在当前项目。新增/删除使用相同 revision 与 commit/travel 历史，快照同时保存 annotations 与 saved_selectors。普通标注/格式事务也携带命名筛选状态，避免撤销时丢失。只保存条件，不含格式、不持续应用。
 - `AnnotationRequest.reset_role` 清除手动覆盖，保留标签和格式；不能与新 role 同时提交。现有 confirmed 响应字段保留兼容，其含义仅为有手动覆盖，界面不再把它呈现为确认进度。
 - 命名筛选只保存 UI 可编辑的单层条件列表或表达式；旧的嵌套 selector API 仍可用于查询/格式事务。框选 ID 属于原 DOCX，不能跨文档复用。
@@ -161,7 +163,7 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 
 - `emptySelectionSession/activateSelection/leaveSelection` 统一会话状态。首次进入与切换文件清空历史；退出清空实际条件，将上次范围深复制到 previous。恢复（包括全选空 AND）需要显式操作，删除最后一个简单条件不能隐式全选。高级失效引用留在编辑态报错。
 - SelectorBuilder 在未启用时只渲染空闲容器，活动条件、表达式、保存栏和匹配摘要均不渲染。退出筛选清除匹配/预览/仅匹配视图，不修改工作页签或格式草稿。
-- 高级表达式在条件列表与添加入口之后渲染；快照行只呈现类别、关系和计数，编号另占一整行折叠展示。快照范围不可原地更新，关系是/不是仍可改。
+- 高级表达式在条件列表与添加入口之后渲染。2A 曾将不可变快照的计数与折叠编号分开；F1 已替换为可直接编辑的编号输入和完整编号浮窗，关系是/不是仍可修改。
 - 全局筛选暂缓：当前保存范围属于项目，未来与持续规则模板共用可跨文档的语义条件；含 ids 的快照不得直接跨文档使用。
 
 
@@ -187,7 +189,7 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 - `DocumentCanvas` 对规则及单次预览均采用完整 after_blocks；仅变化段落增加前后副本。切换工作页签取消预览并保留草稿。
 - `FormatSources` 解释当前属性来源及被覆盖层，提供局部单项/全部清除；只读对象无可用修改入口。
 - `BulkAnnotations` 可折叠；动作、类别、标签草稿放在 App，跨页签不重置动作。按钮显示当前命中数，成功后清空标签输入。
-- `ObjectQuickMenu` 在 body portal 中显示，尺寸定位受视口约束；外部点击/滚动/Esc 关闭。支持 Shift+F10、箭头切换按钮和键盘 focus，Esc 不穿透退出当前预览。检查对象不隐式加入筛选，框选仍需显式复制为条件。
+- `ObjectQuickMenu` 在 body portal 中显示，尺寸定位受视口约束；外部点击/滚动/Esc 关闭。支持 Shift+F10、箭头切换按钮和键盘 focus，Esc 不穿透退出当前预览。检查对象不隐式加入筛选；F1 后第三个按钮为“切换此段选择”，复用 Ctrl 点选逻辑。
 - 静态组件测试在 .artifacts/ui-tests 下临时编译并渲染，复用已安装的 Vite/esbuild，不启动浏览器、不访问本机网页。它能检查 JSX 输出与完整预览结果，不能代替点击、焦点或视觉实测。
 
 
@@ -230,13 +232,17 @@ POST preview 可带 `?compact=true`，不改变计算路径与提交契约，仅
 
 帮助提示支持鼠标悬停与键盘聚焦；错误及提交/范围状态常驻。导出弹窗新增标准解释，不改变既有审计算法。F1 无项目 schema 变化，v4 及旧包读取兼容。F2 将以类别一次性模板替换规则，同时设计旧规则/历史迁移，不能先删除数据或静默改变当前格式。
 
-## 16. F1 补充：直接选择、Ctrl 条件与当前开关状态
+## 16. F1 补充：持续点选、可编辑编号与当前开关状态
 
-`SelectionSession` 新增仅前端的 `direct` 与 `gestureKey`，不进入项目或命名筛选。`selectParagraph` 为纯状态转移：无范围/直接选择时维护一个 ids 条件，普通点击替换、Ctrl/Meta 点击去重添加；经 `activateSelection` 的预设/条件编辑/恢复操作进入自定义筛选，普通点击保持原 selector 引用，只结束旧手势。自定义 Ctrl 点击创建 ids 条件、记住 key，同次手势复制并扩充该组，下一手势不会重写旧快照。30 条上限、代号避让和既有高级表达式保持不变，空失效表达式不会因添加点选被修成无关的有效范围。
+`SelectionSession` 的 `direct` 与 `pendingChanges` 仅属于前端会话，不进入项目 schema。`selectParagraph` 在无范围/直接选择时维护一个 ids 条件：普通点击替换、Ctrl/Meta 点击增删；取消最后一段用空 OR 表示零命中。预设、条件编辑和恢复筛选经 `activateSelection` 进入自定义筛选，普通点击只移动查看焦点。Ctrl 每次点击独立生效，松开/失焦不分组，不再有 gestureKey/keyup 手势状态。
 
-App 在 Control/Meta keyup、窗口 blur、文档隐藏、工作页切换时调用 `endPointerGesture`；结束手势不改 selector 引用，不触发多余查询。清空/切换文件/修改条件也终止分组。确认放弃未添加标签后的延迟点击作为独立手势，避免在 Ctrl 已释放后复活旧组。同一个对象上的格式入口不清除尚未添加的标签草稿，也不重复确认。只读对象可查看但不加入范围。
+`domain.point_selection.adjust_selection` 接受原 selector 和逐段期望状态，先校验原条件、目标可编辑性和 revision。复用根部 AND 的排除项与 OR 的纳入项，仅改指定 ID；取消点选先移除正向 ID，仍被语义条件纳入才加排除。增选先移除对应排除，仍未命中才加纳入。必要时生成可见高级表达式，例如 `(正文 OR 点选是) AND 点选不是`；不把嵌套或 NOT 下的 ID 条件强行合并，不支持旧 API 嵌套 JSON 组。30 条上限及表达式限制继续生效，错误不改变原条件。返回普通 Selector，可直接保存为命名筛选，无新持久字段。
 
-App 的 current 只标记最近查看对象；DocumentCanvas 普通点击调用点选逻辑，右键“检查对象”仍调用独立检查入口。自定义筛选时 current 用灰色；CSS 用 `:not(.matched):not(.pending)` 限制查看框/标签，匹配与预览优先，代码块底色也不能覆盖匹配色。右键“加入条件”视作独立一次 Ctrl 操作。移除 marked/marking 临时集合和旧框选复选框。范围栏区分“直接选择”与“选择范围”，“操作”页统一处理单段与多段；右键/对象页“此段格式”可显式替换筛选为直接选择。
+`useSelection` 复用 LatestPreview 合并并串行请求，`selectionView` 绑定项目/修订/selector/待执行点选签名。Ctrl 只临时增删目标高亮，其余保留；服务端确认后以真实结果对齐。条件编辑期间也保留同修订旧高亮，仅作视觉参考；新鲜结果确认前禁用预览提交、命名保存和批量标注。过期响应不得发布；错误撤回临时高亮并显示原因，换文件或 revision 不复用旧范围。
+
+`rangeInputs` 独立保存编号草稿，仅允许数字和空格；Enter/失焦后校验、去重和去前导零，不存在/只读编号报错，不静默丢弃。输入未确认时暂停范围提交，包括空文本在内的草稿均保护跨文件切换与刷新。悬浮/聚焦输入显示完整编号，替代折叠快照容器。
+
+App 的 current 只标记最近查看对象；DocumentCanvas 普通点击调用点选逻辑，右键“检查对象”仍调用独立检查入口。自定义筛选时 current 用灰色；CSS 用 `:not(.matched):not(.pending)` 限制查看框/标签，匹配与预览优先，代码块底色也不能覆盖匹配色。右键“切换此段选择”复用 Ctrl 增删逻辑。移除 marked/marking 临时集合和旧框选复选框。范围栏区分“直接选择”与“选择范围”，“操作”页统一处理单段与多段；右键/对象页“此段格式”可显式替换筛选为直接选择。
 
 `formatState.ts` 从已保存且当前命中的 Block 读取六个开关；粗斜体用各 run，分页用段落。统一值、混合、未知、无范围四种状态分别呈现，未解析不默认为 false。FormatFields 空字符串选项仅显示当前状态，实际 patch 仍为空，显式输入优先。规则编辑不传当前状态，继续表达规则定义自身。应用/撤销后自动使用新文档投影，不复活草稿。
 

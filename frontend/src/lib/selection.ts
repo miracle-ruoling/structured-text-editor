@@ -2,11 +2,12 @@ import type { Condition, Selector } from './types.ts';
 
 export type SelectionSession = {
   selector: Selector; active: boolean; previous: Selector | null;
-  direct: boolean; gestureKey: string | null;
+  direct: boolean;
+  pendingChanges: { id: string; selected: boolean }[];
 };
 
 export function emptySelectionSession(): SelectionSession {
-  return { selector: { mode: 'all', conditions: [] }, active: false, previous: null, direct: false, gestureKey: null };
+  return { selector: { mode: 'all', conditions: [] }, active: false, previous: null, direct: false, pendingChanges: [] };
 }
 
 export function leaveSelection(session: SelectionSession): SelectionSession {
@@ -18,33 +19,47 @@ export function leaveSelection(session: SelectionSession): SelectionSession {
 
 export function activateSelection(session: SelectionSession, selector: Selector, explicitAll = false): SelectionSession {
   if (!explicitAll && selector.mode !== 'expression' && !selector.conditions.length) return leaveSelection(session);
-  return { ...session, selector: withKeys(selector), active: true, direct: false, gestureKey: null };
+  return { ...session, selector: withKeys(selector), active: true, direct: false, pendingChanges: [] };
 }
 
-export function endPointerGesture(session: SelectionSession): SelectionSession {
-  return session.gestureKey === null ? session : { ...session, gestureKey: null };
-}
-
-/** Direct selection keeps one ID group; explicit filters keep each Ctrl gesture separate. */
-export function selectParagraph(session: SelectionSession, id: string, extend: boolean): SelectionSession {
+/** Direct clicks replace the range; Ctrl/Meta toggles in the same live ID set. */
+export function selectParagraph(session: SelectionSession, id: string, toggle: boolean): SelectionSession {
   if (!session.active || session.direct) {
-    const ids = extend && session.active ? session.selector.conditions[0].ids || [] : [];
-    return { ...session, active: true, direct: true, gestureKey: null,
-      selector: { mode: 'all', conditions: [rangeCondition([...ids, id], 'A')] } };
+    const ids = session.direct ? [...(session.selector.conditions[0]?.ids || [])] : [];
+    const next = toggle ? (ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id]) : [id];
+    return { ...session, active: true, direct: true, pendingChanges: [],
+      selector: next.length ? { mode: 'all', conditions: [rangeCondition(next, 'A')] } : { mode: 'any', conditions: [] } };
   }
-  if (!extend) return endPointerGesture(session);
-  const base = session.selector;
-  const existing = base.conditions.find(c => c.key === session.gestureKey && c.field === 'ids' && c.op === 'is');
-  if (existing) {
-    if (existing.ids?.includes(id)) return session;
-    return { ...session, selector: { ...base, conditions: base.conditions.map(c => c === existing ? rangeCondition([...(c.ids || []), id], c.key) : c) } };
+  if (!toggle) return session;
+  return pointIntent(session, id, false);
+}
+
+export function finishPointAdjustment(session: SelectionSession, result: {
+  selector: Selector;
+}): SelectionSession {
+  return { ...session, selector: withKeys(result.selector), active: true, direct: false, pendingChanges: [] };
+}
+
+export function pointIntent(session: SelectionSession, id: string, selected: boolean): SelectionSession {
+  if (session.direct) return session;
+  const existing = session.pendingChanges.findIndex(change => change.id === id);
+  const pendingChanges = existing < 0
+    ? [...session.pendingChanges, { id, selected }]
+    : session.pendingChanges.map((change, index) => index === existing ? { ...change, selected } : change);
+  return { ...session, pendingChanges };
+}
+
+export function parseParagraphIds(value: string, available: Set<string>): { ids?: string[]; error?: string } {
+  const tokens = value.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return { error: '请至少输入一个段落编号。' };
+  const numbers = new Set<string>();
+  for (const token of tokens) {
+    if (!/^\d+$/.test(token)) return { error: '段落编号只能包含数字，并以空格分隔。' };
+    const number = token.replace(/^0+/, '');
+    if (!number || !available.has(`p${number}`)) return { error: `文档中没有可操作的第 ${token} 段。` };
+    numbers.add(number);
   }
-  if (base.conditions.length >= 30) throw new Error('最多 30 个条件，请先删除不需要的条件再添加。');
-  const condition = rangeCondition([id], nextKey(base));
-  return { ...session, gestureKey: condition.key!, selector: { ...base, conditions: [...base.conditions, condition],
-    // Leave an invalid empty expression invalid rather than silently discarding its conditions.
-    expression: base.mode === 'expression' ? (base.expression?.trim() ? `(${base.expression}) AND $${condition.key}` : base.expression) : '',
-  } };
+  return { ids: [...numbers].map(number => `p${number}`) };
 }
 
 function letterKey(number: number): string {
