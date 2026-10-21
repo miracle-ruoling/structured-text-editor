@@ -197,6 +197,13 @@ def edit_document(source, project, operation: TextEditRequest):
     if paragraph is None or not text_editable(paragraph):
         raise ValueError('该段含受保护结构，暂不可修改文字')
     text = paragraph_text(paragraph)
+    if operation.action == 'paste':
+        if operation.end > len(text):
+            raise ValueError('粘贴选区超出段落')
+        if len(package.ids) + operation.text.count('\n') > 20000:
+            raise ValueError('最多支持 20,000 段')
+        if len(text) - (operation.end - operation.offset) + len(operation.text) > 100000:
+            raise ValueError('本次粘贴文字过长，最多支持 100,000 字符')
     if operation.action == 'replace' and text == operation.text:
         return operation.id
     before = Snapshot(label='文字编辑', annotations=deepcopy(project.annotations),
@@ -217,6 +224,34 @@ def edit_document(source, project, operation: TextEditRequest):
     focus = operation.id
     if operation.action == 'replace':
         replace_text(paragraph, operation.text)
+    elif operation.action == 'paste':
+        # Only clipboard newlines create paragraphs; existing soft breaks stay intact.
+        start, end, value = operation.offset, operation.end, operation.text
+        holder = etree.Element(q('p'))
+        holder.extend(slice_runs(paragraph, 0, start))
+        append_text(holder, value)
+        holder.extend(slice_runs(paragraph, end, len(text)))
+        markers = []
+        for pos, marker in text_markers(paragraph):
+            mapped = pos if pos <= start else pos + len(value) - (end - start) if pos >= end else start + (pos - start) * len(value) // (end - start)
+            markers.append((mapped, marker))
+        boundaries = [start + i for i, char in enumerate(value) if char == '\n']
+        lo, current = 0, paragraph
+        total = len(paragraph_text(holder))
+        for index, hi in enumerate([*boundaries, total]):
+            last = index == len(boundaries)
+            install_text(current, slice_runs(holder, lo, hi),
+                         [(pos - lo, marker) for pos, marker in markers if lo <= pos <= hi])
+            if not last:
+                # Markers at the removed newline belong to the end of the left paragraph.
+                right = etree.Element(q('p'))
+                set_category(right, 'body', None)
+                current.addnext(right)
+                focus = f'p{project.next_paragraph}'
+                project.next_paragraph += 1
+                package.ids[right] = focus
+                project.annotations[focus] = Annotation(role='body')
+                current, lo = right, hi + 1
     elif operation.action == 'category':
         set_category(paragraph, operation.role, operation.level)
         annotation = project.annotations.setdefault(operation.id, Annotation())

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { chooserKey, paragraphChoices } from '../src/lib/textEditing.ts';
+import { chooserKey, paragraphChoices, pasteCaret } from '../src/lib/textEditing.ts';
+
+test('粘贴焦点按码点定位到最后一段插入末尾，保留空行', () => {
+  assert.equal(pasteCaret('中😀', 3), 5);
+  assert.equal(pasteCaret('一\n\n尾😀', 3), 2);
+  assert.equal(pasteCaret('一\n', 3), 0);
+});
 
 test('新段落默认为正文，数字及方向键只选择，回车才确认', () => {
   assert.equal(paragraphChoices[0].role, 'body');

@@ -9,6 +9,88 @@ def edit(client, view, **operation):
     return client.post(f'/api/projects/{view["id"]}/text', json={'revision': view['revision'], **operation})
 
 
+def test_paste_paragraphs_atomic_history_stable_ids_and_roundtrip(client):
+    view = client.post('/api/projects/blank').json()
+    view = edit(client, view, action='replace', id='p1', text='前😀选中尾\n软换行').json()
+    view = edit(client, view, action='category', id='p1', role='title').json()
+    before = view
+    view = edit(client, view, action='paste', id='p1', offset=2, end=4, text='甲\n\n乙😀\n').json()
+    assert [(b['id'], b['text']) for b in view['blocks']] == [
+        ('p1', '前😀甲'), ('p2', ''), ('p3', '乙😀'), ('p4', '尾\n软换行')]
+    assert [b['role'] for b in view['blocks']] == ['title', 'body', 'body', 'body']
+    assert view['edit_focus'] == 'p4'
+    undone = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': view['revision']}).json()
+    assert undone['blocks'] == before['blocks']
+    redone = client.post(f'/api/projects/{view["id"]}/redo', json={'revision': undone['revision']}).json()
+    assert redone['blocks'] == view['blocks']
+    backup = client.get(f'/api/projects/{view["id"]}/export/project').content
+    restored = client.post('/api/projects/import', files={'file': ('paste.sdoc', backup)}).json()
+    assert restored['blocks'] == view['blocks']
+    undone = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': redone['revision']}).json()
+    new = edit(client, undone, action='paste', id='p1', offset=0, end=0, text='新\n').json()
+    assert new['blocks'][1]['id'] == 'p5'
+
+
+@pytest.mark.parametrize('operation', [
+    {'offset': 0, 'end': 999, 'text': '一\n二'},
+    {'offset': 1, 'end': 0, 'text': '一\n二'},
+    {'offset': 0, 'text': '一\n二'},
+    {'offset': 0, 'end': 0, 'text': '\n' * 20000},
+    {'offset': 0, 'end': 0, 'text': '\x00'},
+])
+def test_invalid_paste_is_atomic(client, operation):
+    view = client.post('/api/projects/blank').json()
+    assert edit(client, view, action='paste', id='p1', **operation).status_code in (400, 422)
+    assert client.get(f'/api/projects/{view["id"]}').json() == view
+
+
+def test_paste_preserves_unselected_runs_markers_and_package(client, rich_source):
+    from lxml import etree
+    from structured_editor.docx.editing import append_text, paragraph_text, text_markers
+    from structured_editor.docx.xml import q
+    package = DocxPackage(rich_source)
+    p = package.by_id['p1']
+    for child in list(p):
+        if child.tag != q('pPr'):
+            p.remove(child)
+    etree.SubElement(p, q('bookmarkStart'), {q('id'): '9', q('name'): 'keep'})
+    bold = etree.Element(q('rPr'))
+    etree.SubElement(bold, q('b'))
+    append_text(p, '前😀', bold)
+    append_text(p, '删除')
+    italic = etree.Element(q('rPr'))
+    etree.SubElement(italic, q('i'))
+    append_text(p, '尾', italic)
+    etree.SubElement(p, q('bookmarkEnd'), {q('id'): '9'})
+    source = package.replace_document()
+    view = client.post('/api/projects/import', files={'file': ('paste.docx', source)}).json()
+    view = client.post(f'/api/projects/{view["id"]}/enable-text', json={'revision': view['revision']}).json()
+    untouched = {b['id']: b for b in view['blocks'][1:]}
+    view = edit(client, view, action='paste', id='p1', offset=2, end=4, text='一\n二').json()
+    assert all(b == untouched[b['id']] for b in view['blocks'] if b['id'] in untouched)
+    output = client.get(f'/api/projects/{view["id"]}/export/docx').content
+    after = DocxPackage(output)
+    assert [paragraph_text(p) for p in after.paragraphs[:2]] == ['前😀一', '二尾']
+    assert after.paragraphs[0].find(f'{q("r")}/{q("rPr")}/{q("b")}') is not None
+    assert after.paragraphs[1].findall(q('r'))[-1].find(f'{q("rPr")}/{q("i")}') is not None
+    assert [(pos, node.tag) for p in after.paragraphs[:2] for pos, node in text_markers(p)] == [
+        (0, q('bookmarkStart')), (2, q('bookmarkEnd'))]
+    assert etree.tostring(after.paragraphs[3]) == etree.tostring(package.paragraphs[2])
+    with zipfile.ZipFile(io.BytesIO(source)) as old, zipfile.ZipFile(io.BytesIO(output)) as new:
+        assert all(old.read(name) == new.read(name) for name in old.namelist() if name != 'word/document.xml')
+    assert client.app.state.store.source(view['id']) == source
+
+
+def test_paste_stays_in_table_cell_and_rejects_complex_paragraph(client, rich_source):
+    view = client.post('/api/projects/import', files={'file': ('table.docx', rich_source)}).json()
+    view = client.post(f'/api/projects/{view["id"]}/enable-text', json={'revision': view['revision']}).json()
+    assert edit(client, view, action='paste', id='p3', offset=0, end=0, text='一\n二').status_code == 400
+    target = next(b for b in view['blocks'] if b['in_table'] and b['text_editable'])
+    view = edit(client, view, action='paste', id=target['id'], offset=0, end=0, text='一\n二').json()
+    added = next(b for b in view['blocks'] if b['id'] == view['edit_focus'])
+    assert added['in_table'] and added['text'] == '二' + target['text']
+
+
 def test_blank_title_split_ids_history_and_roundtrip(client):
     view = client.post('/api/projects/blank').json()
     assert view['text_editing'] and view['blocks'][0]['text_editable']

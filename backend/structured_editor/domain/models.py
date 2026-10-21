@@ -216,10 +216,11 @@ class EditableDocument(Model):
 
 class TextEditRequest(Model):
     revision: int
-    action: Literal["replace", "split", "join", "delete", "category"]
+    action: Literal["replace", "split", "join", "delete", "category", "paste"]
     id: str = Field(pattern=r"^p[1-9][0-9]*$")
     text: str | None = Field(default=None, max_length=100000)
     offset: int | None = Field(default=None, ge=0)
+    end: int | None = Field(default=None, ge=0)
     role: Role = "body"
     level: int | None = Field(default=None, ge=1, le=3)
 
@@ -229,6 +230,8 @@ class TextEditRequest(Model):
             raise ValueError("缺少正文")
         if self.action == "split" and self.offset is None:
             raise ValueError("缺少拆分位置")
+        if self.action == "paste" and (self.text is None or self.offset is None or self.end is None or self.end < self.offset):
+            raise ValueError("粘贴需要文字及有效的段内选区")
         if (self.role == "heading") != (self.level is not None):
             raise ValueError("小标题需指定级别，其他类别不能设置小标题级别")
         if self.text is not None and any(not (c in "\n\t" or 0x20 <= ord(c) <= 0xD7FF

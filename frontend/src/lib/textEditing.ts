@@ -7,7 +7,23 @@ export const paragraphChoices: { label: string; role: Role; level?: number }[] =
   { label: '引用', role: 'quote' }, { label: '代码', role: 'code' }, { label: '列表', role: 'list' },
   { label: '参考文献', role: 'reference' }, { label: '未分类', role: 'unclassified' },
 ];
-export type TextOperation = { action: 'replace' | 'split' | 'join' | 'delete' | 'category'; id: string; text?: string; offset?: number; role?: Role; level?: number };
+export type TextOperation = { action: 'replace' | 'split' | 'join' | 'delete' | 'category' | 'paste'; id: string; text?: string; offset?: number; end?: number; role?: Role; level?: number };
+
+export function pasteCaret(text: string, offset: number) {
+  const lines = text.split('\n');
+  return [...lines[lines.length - 1]].length + (lines.length === 1 ? offset : 0);
+}
+
+export function selectedTextRange(element: HTMLElement): { offset: number; end: number } | null {
+  const selection = window.getSelection();
+  if (!selection?.rangeCount) return null;
+  const range = selection.getRangeAt(0);
+  if (!element.contains(range.startContainer) || !element.contains(range.endContainer)) return null;
+  const prefix = range.cloneRange(); prefix.selectNodeContents(element);
+  prefix.setEnd(range.startContainer, range.startOffset);
+  const offset = [...prefix.toString()].length;
+  return { offset, end: offset + [...range.toString()].length };
+}
 
 export function chooserKey(key: string, selected: number, composing: boolean) {
   if (composing) return { action: 'ignore', selected };

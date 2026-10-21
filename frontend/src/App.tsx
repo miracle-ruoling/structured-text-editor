@@ -20,7 +20,7 @@ import type { SelectionSession } from './lib/selection';
 import { emptyTemplate, templateDraft, templateDirty, extractedEntries } from './lib/templates';
 import type { TemplateDraft, Extraction } from './lib/templates';
 import { useTemplatePreview } from './lib/useTemplatePreview';
-import { caretOffset } from './lib/textEditing';
+import { caretOffset, pasteCaret } from './lib/textEditing';
 import type { TextOperation } from './lib/textEditing';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
@@ -359,9 +359,11 @@ export default function App() {
       try {
         const index = currentDoc.blocks.findIndex(b => b.id === operation.id);
         const previous = currentDoc.blocks[index - 1];
-        const offset = operation.action === 'join' ? [...(previous?.text || '')].length : 0;
+        const offset = operation.action === 'paste' ? pasteCaret(operation.text || '', operation.offset || 0)
+          : operation.action === 'join' ? [...(previous?.text || '')].length : 0;
         const value = await api.editText(currentDoc, operation);
         acceptDoc(value);
+        setMessage(null);
         if (operation.action !== 'replace') {
           setEditorFocus({ id: value.edit_focus || operation.id, offset, choose: operation.action === 'split', token: Date.now() });
         }

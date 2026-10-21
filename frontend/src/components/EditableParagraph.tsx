@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Block } from '../lib/types';
-import { caretOffset, chooserKey, focusText, paragraphChoices } from '../lib/textEditing';
+import { caretOffset, chooserKey, focusText, paragraphChoices, selectedTextRange } from '../lib/textEditing';
 import type { TextOperation } from '../lib/textEditing';
 import { paragraphInsets } from '../lib/workspace';
 
@@ -26,6 +26,8 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
   const [selected, setSelected] = useState(0);
   const [error, setError] = useState('');
   const [acting, setActing] = useState(false);
+  const [failedPaste, setFailedPaste] = useState<TextOperation | null>(null);
+  const failedPasteRef = useRef<TextOperation | null>(null);
   const actingRef = useRef(false);
   const focusedToken = useRef<number | undefined>(undefined);
 
@@ -70,7 +72,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
         persisted.current = value;
       }
       return true;
-    })().finally(() => { pending.current = null; report.current(block.id, draft.current !== persisted.current, false); });
+    })().finally(() => { pending.current = null; report.current(block.id, draft.current !== persisted.current || !!failedPasteRef.current, false); });
     return pending.current;
   }
   function schedule() {
@@ -88,9 +90,17 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
       if (await save()) {
         report.current(block.id, true, true);
         const result = await latest.current(operation);
-        if (result) setChooser(false);
+        if (result) {
+          setChooser(false); setError('');
+          failedPasteRef.current = null; setFailedPaste(null);
+        } else if (operation.action === 'paste') {
+          failedPasteRef.current = operation; setFailedPaste(operation);
+          setError('粘贴未成功，文字已保留，可重试或下载。');
+        }
+      } else if (operation.action === 'paste') {
+        failedPasteRef.current = operation; setFailedPaste(operation);
       }
-    } finally { actingRef.current = false; setActing(false); report.current(block.id, draft.current !== persisted.current, false); }
+    } finally { actingRef.current = false; setActing(false); report.current(block.id, draft.current !== persisted.current || !!failedPasteRef.current, false); }
   }
   function category(index: number) {
     setSelected(index);
@@ -99,7 +109,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
   }
   return <div className="inline-writing" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     <div ref={ref} className="paragraph-text editable-text" role="textbox" aria-label={`${block.id.toUpperCase()} 文字编辑`} aria-multiline="true"
-      contentEditable={!busy && !acting} suppressContentEditableWarning
+      contentEditable={!busy && !acting && !failedPaste} suppressContentEditableWarning
       style={{ fontSize: `${block.format.size_pt || 12}pt`, fontWeight: block.format.bold ? 700 : 400,
         ...paragraphInsets(block.format), marginTop: `${block.format.space_before_pt || 0}pt`, marginBottom: `${block.format.space_after_pt ?? 4}pt`,
         fontStyle: block.format.italic ? 'italic' : 'normal', whiteSpace: 'pre-wrap',
@@ -112,11 +122,11 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
       onCompositionEnd={() => { composing.current = false; changed(); }}
       onPaste={event => {
         event.preventDefault(); setChooser(false);
+        if (busy || actingRef.current || composing.current || failedPasteRef.current) return;
         const value = event.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
-        const selection = window.getSelection();
-        if (!selection?.rangeCount) return;
-        const range = selection.getRangeAt(0); range.deleteContents(); const node = document.createTextNode(value); range.insertNode(node);
-        range.setStartAfter(node); range.collapse(true); selection.removeAllRanges(); selection.addRange(range); changed();
+        const range = selectedTextRange(ref.current!);
+        if (!range) { setError('暂不支持跨段粘贴替换，请在一个段落内选择插入位置。'); return; }
+        if (value) void action({ action: 'paste', id: block.id, text: value, ...range });
       }}
       onKeyDown={event => {
         if (event.nativeEvent.isComposing || composing.current) return;
@@ -159,8 +169,12 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
       {paragraphChoices.map((choice, index) => <button key={choice.label} type="button" tabIndex={-1} aria-pressed={selected === index}
         className={selected === index ? 'selected' : ''} disabled={busy || acting} onClick={() => category(index)}>{index + 1}.{choice.label}</button>)}
     </div>}
-    {error && <div className="inline-edit-error" role="alert">{error}<button onClick={() => void save()}>重试保存</button><button onClick={() => {
-      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = `${block.id}-本地输入.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
-    }}>下载本地文字</button></div>}
+    {error && <div className="inline-edit-error" role="alert">{error}<button onClick={() => failedPaste ? void action(failedPaste) : void save()}>重试保存</button><button onClick={() => {
+      const url = URL.createObjectURL(new Blob([failedPaste?.text ?? text], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = `${block.id}-本地输入.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }}>下载本地文字</button>{failedPaste && <button onClick={() => {
+      if (!window.confirm('放弃本次未成功的粘贴？已保存正文不会改变。')) return;
+      failedPasteRef.current = null; setFailedPaste(null); setError('');
+      report.current(block.id, draft.current !== persisted.current, false);
+    }}>放弃粘贴</button>}</div>}
   </div>;
 }
