@@ -520,3 +520,5 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .document-block.matched:not(.pending) { background: #f4f9f5; }
 .document-block.focused.focus-muted:not(.matched):not(.pending) { border-color: #bdc3c4; background: #f2f4f4; box-shadow: none; }
 .document-block.focused.focus-muted:not(.matched):not(.pending)::after { content: '仅查看'; color: #737d7e; background: #f2f4f4; }
+
+.native-entry { display: inline-flex; align-items: center; text-decoration: none; color: inherit; border: 1px solid var(--line); }

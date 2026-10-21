@@ -345,6 +345,7 @@ export default function App() {
     <header className="app-header">
       <div className="brand"><div className="brand-mark"><span /><span /><span /></div><strong>文序</strong><span className="brand-caption">结构化文档工作台</span></div>
       <div className="header-actions">
+        <a className="secondary native-entry" href="/?mode=native" target="_blank" rel="noopener noreferrer" title="在新页面打开原生写作">原生写作 ↗</a>
         <span className="save-status">{busy ? <><LoaderCircle size={13} className="spin" />处理中</> : <><CheckCheck size={14} />{hasDraft ? '已保存 · 有未提交草稿' : '已保存到本机'}</>}</span>
         <input ref={inputRef} type="file" hidden accept=".docx,.sdoc" onChange={e => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
         <button className="secondary" disabled={busy} onClick={() => inputRef.current?.click()}><FileInput size={15} />导入文件</button>

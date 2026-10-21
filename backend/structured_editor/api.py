@@ -30,6 +30,7 @@ from .domain.templates import (
     TemplateSave,
     extract_template,
 )
+from .native_api import native_router
 from .storage import ProjectStore
 from .template_store import TemplateStore
 
@@ -40,6 +41,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="文序", docs_url=None, redoc_url=None)
     store = ProjectStore(data_dir or ROOT / "data")
     app.state.store = store
+    app.include_router(native_router(store.root, store.lock))
     templates = TemplateStore(store.root)
     app.state.templates = templates
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])

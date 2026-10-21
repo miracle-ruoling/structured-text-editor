@@ -274,3 +274,14 @@ HTTP 入口：`/api/templates` 列表，`/save`、`/delete`、`/restore`、`/imp
 项目 GET/导入先计算迁移候选，所有当前/历史状态完成并验证后才原子保存；导入在创建目录/文件前完成迁移。去重比较迁移后的规范状态与档案，命中旧项目才保存其迁移结果。无规则 v1–v4 同样升级 v5 并递增修订；v5 无规则重复打开不写入。旧规则引擎、端点、未挂载前端组件仍留作兼容验证，已归档项目拒绝旧规则写入。正常 UI 只有模板入口，不承诺旧客户端继续编辑已迁移项目。
 
 本阶段不实现多级类别、全部 Word 格式提取、精确分页或完整 DOM 虚拟化。自动检查覆盖迁移保真、范围保留、模板库与预览新鲜度；没有本轮浏览器视觉及长文档帧率实测。
+
+
+## 18. 阶段 3A：独立原生写作契约
+
+- 原生格式标识 wenxu-native / version=1，与保留式项目 v5 分离。domain/native.py 校验内容和历史，native_store.py 原子存储到 data/native/<UUID>.json，native_api.py 暴露 /api/native；使用现有单进程 RLock，领域层无 HTTP 依赖。未知版本/字段拒绝，不猜测迁移。导入分配新项目 ID、保留内容节点 ID 和历史。
+- 内容包含 name 和 blocks；每块 UUID、paragraph/heading、可选 1–3 级、纯文本。ID 不依赖 DOCX 遍历序号。Tiptap 拆分新增节点分配新 UUID；粘贴清除外部 ID、重复 ID 修复。标题层级目前表示结构，不作为旧 role 的替代定义。
+- 保存提交完整内容与 revision；无变化不增版本；每次有效保存将旧内容和名称加入最近 50 次历史、清空 redo。撤销重做递增 revision，保存 JSON 后响应。任何磁盘替换失败保持旧文件，重试重新读取磁盘状态。
+- 前端 NativeSaveQueue 串行提交，响应不覆盖等待期间的新输入；停顿 700ms 保存，IME composing 时延期触发。切换/导出先 flush，失败停止；冲突保留本地输入与旧 revision，可下载仅包含本地内容的备份，再重新打开或导入副本。服务端备份含历史，本地草稿备份不含历史。
+- /api/native 的创建、列表、导入、读取、save、history/undo|redo、export/docx|project 与旧 /api/projects 分离。导出必须携带当前 revision。原生备份扩展名 .wnative.json，与 .sdoc 入口分开。最近列表最多 30 项。
+- docx/native.py 创建新 OOXML 包，正文 12pt（24 半磅），一级/二级/三级标题 18/15/13pt，明确继承 Normal 并设置 outlineLvl 0/1/2、keepNext；A4 页尺寸和页边距用 twip。特殊字符由 lxml 转义，制表符/换行分别生成 tab/br。不读取或覆盖任何用户源包。
+- 原生编辑器独立页面并懒加载，原 DOCX 工作台草稿不被卸载。3B 再接入类别、标签、筛选、模板与同一内容历史；3C 增加资源/复杂节点；3D 增加有降级报告的转换。此处列出的后续能力尚未实现。
