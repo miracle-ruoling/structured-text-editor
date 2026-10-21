@@ -8,3 +8,4 @@ export { SelectorBuilder } from '../src/components/SelectorBuilder';
 export { FormatPanel } from '../src/components/FormatPanel';
 export { FormatFields } from '../src/components/FormatFields';
 export { ExportInspection } from '../src/components/ExportInspection';
+export { TemplatePanel } from '../src/components/TemplatePanel';

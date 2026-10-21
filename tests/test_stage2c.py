@@ -244,12 +244,14 @@ def test_v3_migration_preserves_rules_and_rejects_bad_run_ids(client, document):
         annotation.pop("sizes", None)
     raw = json.dumps(legacy).encode()
     path.write_bytes(raw)
-    assert client.get(f"/api/projects/{document['id']}").json()["blocks"] == document["blocks"]
-    assert path.read_bytes() == raw
+    reloaded = client.get(f"/api/projects/{document['id']}").json()
+    assert reloaded["blocks"] == document["blocks"]
+    assert json.loads(path.read_bytes())["version"] == 5
+    assert reloaded["revision"] == document["revision"] + 1
     doc = post(
-        client, document, "apply", selector=scope("p3"), patch={}, size_change={"mode": "points", "amount": 1}
+        client, reloaded, "apply", selector=scope("p3"), patch={}, size_change={"mode": "points", "amount": 1}
     )
-    assert json.loads(path.read_bytes())["version"] == 4
+    assert json.loads(path.read_bytes())["version"] == 5
     bundle = client.get(f"/api/projects/{doc['id']}/export/project").content
     with zipfile.ZipFile(io.BytesIO(bundle)) as archive:
         state = json.loads(archive.read("project.json"))

@@ -1,22 +1,26 @@
-# 文序架构（截至 2C 反馈 F1 补充修正）
+# 文序架构（截至 F2 类别模板）
 
-2026-10-21。与 PLAN.md 配套。第 8–14 节记录各阶段实现历史；F1 格式交互以第 15 节为准，选择和状态显示以第 16 节为准。旧框选工具、按页范围与锁定已移除。类别模板 F2 尚未实现。
+2026-10-21。与 PLAN.md 配套。第 8–16 节保留各阶段实现记录，其中旧规则/锁定/页签范围描述属于历史；当前格式交互以第 15 节为基础、选择以第 16 节为准，**第 17 节为现行类别模板及旧规则迁移契约**。旧框选工具、按页范围、锁定与持续规则产品入口已移除。
 
 ## 1. 数据流
 
 ```text
 导入 DOCX / sdoc
-  → ProjectStore 校验并保存原文件
+  → ProjectStore 校验原文件及项目
   → DocxPackage 读取 ZIP 和 XML
   → StyleResolver + project_document 生成结构投影
-  → 叠加语义标注 → 重建章节 → 有序规则 → 局部格式及逐 run 字号覆盖
+  → 旧项目在内存中冻结当前/历史规则结果 → 原子保存 v5
+  → 叠加语义标注 → 重建章节 → 局部格式及逐 run 字号覆盖
   → 前端阅读视图与对象检查
 
 选择器 → domain.selectors.select → 命中 ID
 格式草稿 → preview（只读）→ apply（检查 revision）
   → commit（保存原状态到历史）→ 原子保存 JSON
 
-导出 DOCX：原文件 + 规则与局部覆盖的有效补丁 → 定点修改 document.xml → 实际输出保留审计
+全局类别模板 → 全文/当前筛选内按类别匹配 → 自动预览
+  → 一次性应用 → 局部格式及文档历史（无持续绑定）
+
+导出 DOCX：原文件 + 已应用局部覆盖的有效补丁 → 定点修改 document.xml → 实际输出保留审计
 导出 sdoc：原文件 + 完整项目 JSON → ZIP 项目包
 ```
 
@@ -28,6 +32,8 @@
 - `domain/point_selection.py`：只读点选增删，将意图转换为现有选择器；保留其他段落的命中语义。
 - `domain/selectors.py`：唯一的筛选求值实现，供高亮、预览、提交共用。不可编辑对象永不参与操作。
 - `domain/rules.py`：纯格式投影、规则变更验证、逐属性来源与统计；不读文件、不拼 XML。
+- `domain/templates.py`：模板模型、整套格式提取、按类别生成候选局部覆盖。
+- `domain/migrations.py`：按各状态独立冻结旧规则，保留迁移前档案。
 - `domain/commands.py`：revision 校验、状态提交、撤销与重做；不做文件 I/O。
 - `docx/package.py`：ZIP 限制、DOCX 验证、原包保留；支持常规 Transitional OOXML。
 - `docx/xml.py`：命名空间、属性顺序、段落直属 run 定位，避免修改文本框内的嵌套段落。
@@ -40,6 +46,7 @@
 - `docx/audit.py`：实际输出的 ZIP、段落、文本、非格式结构保留检查。
 - `docx/sample.py`：确定性示例生成器；不依赖外部样例文件。
 - `storage.py`：项目读写、语义覆盖、事务协调、最近项目、便携包导入导出。
+- `template_store.py`：全局模板库的原子保存、独立 revision 与删除恢复。
 - `api.py`：HTTP 路由、错误响应、本机来源限制、前端静态资源。
 - `__main__.py`：本机服务启动与浏览器入口。
 - `frontend/src/components/`：Sidebar、SelectorBuilder、DocumentCanvas、FormatPanel、ObjectInspector。
@@ -53,9 +60,9 @@ data/<32 位项目 ID>/
   project.json 项目状态，原子替换
 ```
 
-JSON `version=4`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、有序 rules、undo/redo。每个 annotation 保存可选手工 role、tags、局部 format 与 sizes（段落标记和逐 run 绝对字号）。规则不固化为 annotation。兼容读入 v1/v2/v3，项目 JSON 下一次保存才写为 v4；旧状态/快照缺少的集合默认为空。新包需要当前版本读取，源 DOCX 永不覆盖。
+JSON `version=5`；包含项目名、源文件 SHA-256、revision、更新时间、段落 annotations、命名筛选 saved_selectors、兼容 rules 字段、undo/redo 与可选 legacy_rule_archive。每个 annotation 保存可选手工 role、tags、局部 format 与 sizes（段落标记和逐 run 绝对字号）。v1–v4 打开/导入时升级；规则当前及历史结果分别固化为 annotation，活动 rules 清空，迁移前完整状态留档。无规则旧项目也升级，v5 再打开不重复写入。新包需要当前版本读取，源 DOCX 永不覆盖。
 
-`.sdoc` 是 ZIP，内含同名两个文件。重新导入时检查源文件散列；完全一致的源文件、标注、命名筛选、规则和历史快照复用现有项目；不同状态校验标注段落 ID 后生成新项目 ID 与不重名的显示名称，避免覆盖现有项目。DOCX 字节完全相同时打开最近的已有项目。项目包包括最近 50 次历史，可在重新打开后撤销。
+`.sdoc` 是 ZIP，内含同名两个文件。重新导入时检查源文件散列；先在内存迁移，再以规范化后的标注、命名筛选、规则、迁移档案和全部历史比较，完全一致时复用现有项目。不同状态校验标注/字号定位后生成新项目 ID 与不重名的显示名称；迁移失败不创建半成品项目。DOCX 字节完全相同时打开最近的已有项目。项目包包括最近 50 次历史，可在重新打开后撤销。`data/templates.json` 单独保存全局库，不进入项目包，应用结果已经在 annotations 中。
 
 JSON 写入先落临时文件、flush/fsync，然后 os.replace。服务内部用 RLock 串行化项目状态操作；revision 阻止多个页面用过期状态互相覆盖。该锁针对单个服务进程，首版不要以多进程 worker 同时访问同一 data 目录。
 
@@ -131,10 +138,10 @@ role 与 Word pStyle 分离。自动识别以样式名、大纲级别、编号�
 
 ## 7. 后续扩展边界
 
-- 阶段 2B 持续规则已建立在当前选择器之上，有独立优先级、冲突解释、覆盖与清除语义；2C 已补常见继承、相对字号、结构范围和实际导出报告。
+- 阶段 2B 规则引擎仍用于兼容和迁移验证，F2 已替换产品入口；2C 已补常见继承、相对字号、结构范围和实际导出报告。
 - 阶段 3 的原生编辑模型需要持久节点 ID 和内容事务；当前原包定位方案仅适用于结构未变的 DOCX 修改。
 - 将来的原生导出与当前保留式导出使用不同适配路径，明确记录支持/降级的属性。
-- 当前 .sdoc version=4 是工作项目格式，兼容读取 v1/v2/v3，并非最终通用文档格式。
+- 当前 .sdoc version=5 是工作项目格式，兼容读入并迁移 v1–v4，并非最终通用文档格式。
 
 
 ## 8. 验收后交互修复
@@ -247,3 +254,23 @@ App 的 current 只标记最近查看对象；DocumentCanvas 普通点击调用�
 `formatState.ts` 从已保存且当前命中的 Block 读取六个开关；粗斜体用各 run，分页用段落。统一值、混合、未知、无范围四种状态分别呈现，未解析不默认为 false。FormatFields 空字符串选项仅显示当前状态，实际 patch 仍为空，显式输入优先。规则编辑不传当前状态，继续表达规则定义自身。应用/撤销后自动使用新文档投影，不复活草稿。
 
 全局字体合成设置不动，只在 `.paragraph-text` 允许 `font-synthesis: style` 并由内部 span 继承，修正没有原生斜体字形的中文字体。行内 normal/italic 各自保留；不对整段几何倾斜，不改变 DOCX writer 或源文件。实际字体合成效果仍依赖用户浏览器/字体，本轮浏览器工具被策略阻止，只有静态与纯状态回归证据。
+
+## 17. F2：类别模板与旧规则冻结（现行）
+
+`FormatTemplate(version=1, name, entries)` 只存现有九类的 `role + FormatPatch`，每类最多一项且 patch 非空。没有段落、章节或筛选器引用，也没有相对字号动作。模板以段落为单位应用明确属性；未知或未设置属性不会写入，显式 false/0 保留。按级别划分标题/列表另行建模。
+
+`domain.templates.extract_template` 从当前有效文档的可编辑段落提取：文字属性要求全部可见 run 一致且已知，空段使用段落默认值；各值经过 FormatPatch 单位/步进校验。未知、混合及不能表达的属性省略。每类按整套可提取属性的序列化签名计数，保留真实组合、频次、示例段落和省略属性计数。唯一最高频可建议采用；并列或没有可提取属性时必须选择候选或排除该类，不能逐属性拼出新组合。
+
+`template_annotations` 先用现有 selector 求允许范围，再按 role 选 patch；selector 为 null 表示全文，空 OR 仍为零命中。只叠加明确属性，字号绝对值清除逐 run sizes，其他 patch 不丢弃 sizes。显式文字属性覆盖混合 run 时返回中文提示。`ProjectStore.prepare_template` 同时服务预览和应用，返回命中数、分类数、真实变化及 compact after_blocks，并复用分页边界提示。应用检查 revision，作为一次 commit 进入现有撤销/重做；后续类别/标签变化不会重新套用模板。
+
+`TemplateStore` 保存在与项目相同 data 根目录的 `templates.json`，版本和 revision 独立，所有库读写由单独 RLock 串行化，使用现有 atomic_write。最多 100 份在用、20 份最近删除；名称去首尾空白且不区分大小写判重，删除和恢复均检查库修订。库不使用文档撤销历史。独立 JSON 导出只含模板定义，导入上限 256 KB，不携带库 ID；API 响应和导出忽略空字段，避免前端将 null 误认为待应用属性。
+
+HTTP 入口：`/api/templates` 列表，`/save`、`/delete`、`/restore`、`/import` 和 `/{id}/export` 管理库；`/api/projects/{id}/templates/extract`、`/preview`、`/apply` 针对文档。库变更携带库 revision，文档请求携带文档 revision；应用传完整冻结模板定义，不依赖另一份可被并发修改的库对象。
+
+`useTemplatePreview` 复用 LatestPreview 串行合并调度，以文档 ID/revision、完整模板、selector 组成签名。同范围旧帧可短暂显示但不可提交，换文档/范围/修订或关闭预览立即隐藏；409 可同步文档重试。TemplatePanel 区分库保存和文档应用，编辑草稿在 App 中跨页保留；切换文件/模板或离开页面保护实际未保存输入。应用成功关闭模板预览、保留模板编辑稿，不清掉其他操作页草稿；撤销/重做后也关闭模板预览，让用户看到历史结果。
+
+`domain.migrations.freeze_rules` 独立处理当前与全部 undo/redo：按各状态的标注/规则投影，将 effective_patch 固化到该状态的局部格式，保留局部优先级和 sizes，清空活动 rules。禁用及失效范围规则不产生格式；失效规则警告收集到档案。迁移前的当前快照、undo/redo、revision 完整保存为 legacy_rule_archive，随项目包保留，撤销不会复活旧规则。若已归档项目再次含规则，拒绝迁移并保留磁盘原样。
+
+项目 GET/导入先计算迁移候选，所有当前/历史状态完成并验证后才原子保存；导入在创建目录/文件前完成迁移。去重比较迁移后的规范状态与档案，命中旧项目才保存其迁移结果。无规则 v1–v4 同样升级 v5 并递增修订；v5 无规则重复打开不写入。旧规则引擎、端点、未挂载前端组件仍留作兼容验证，已归档项目拒绝旧规则写入。正常 UI 只有模板入口，不承诺旧客户端继续编辑已迁移项目。
+
+本阶段不实现多级类别、全部 Word 格式提取、精确分页或完整 DOM 虚拟化。自动检查覆盖迁移保真、范围保留、模板库与预览新鲜度；没有本轮浏览器视觉及长文档帧率实测。

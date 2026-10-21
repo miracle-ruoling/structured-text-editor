@@ -16,6 +16,6 @@ export function FormatSources({ block, busy, onClear }: { block: Block; busy: bo
         {overrides.includes(key) && <button className="text-button clear-override" disabled={busy || !block.editable} onClick={() => onClear(block.id, [key])}>清除此项局部覆盖</button>}
       </div>;
     })}</div>
-    <p className="help-text">清除只影响本项目的局部设置，随后使用规则或原文档格式。原 Word 中的直接格式保留。主题与复杂样式的读取仍有边界。</p>
+    <p className="help-text">清除只影响本项目的局部设置（包括已应用的模板），恢复原文档对应格式。原 Word 中的直接格式保留。</p>
   </div>;
 }

@@ -109,7 +109,8 @@ def test_preview_is_read_only_and_restores_mixed_runs(client, source):
     restored = post(client, doc, "rules/preview", action="save", rule=edited)["after_blocks"][0]
     assert restored["runs"] == original["runs"]
     assert restored["mixed"] == original["mixed"]
-    assert client.get(f"/api/projects/{doc['id']}").json() == doc
+    # Legacy preview stays read-only; the normal GET now intentionally migrates rules.
+    assert client.app.state.store.view(client.app.state.store.load(doc["id"])) == doc
     stale = client.post(
         f"/api/projects/{doc['id']}/rules/apply",
         json={"revision": preview["revision"], "action": "save", "rule": edited},
@@ -160,7 +161,7 @@ def test_history_restores_rules_annotations_and_saved_selections(client):
 
 
 @pytest.mark.parametrize("version", [1, 2])
-def test_legacy_rules_migration_is_lazy_and_keeps_history(client, version):
+def test_legacy_project_open_upgrades_once_and_keeps_history(client, version):
     doc = client.post("/api/projects/demo").json()
     doc = post(client, doc, "annotate", ids=["p3"], tags=["旧标签"])
     path = client.app.state.store.folder(doc["id"]) / "project.json"
@@ -174,9 +175,13 @@ def test_legacy_rules_migration_is_lazy_and_keeps_history(client, version):
     path.write_bytes(data)
     reloaded = client.get(f"/api/projects/{doc['id']}").json()
     assert reloaded["blocks"] == doc["blocks"] and reloaded["rules"] == []
-    assert path.read_bytes() == data
+    assert json.loads(path.read_bytes())["version"] == 5
+    assert reloaded["revision"] == doc["revision"] + 1
+    migrated_bytes = path.read_bytes()
+    assert client.get(f"/api/projects/{doc['id']}").json() == reloaded
+    assert path.read_bytes() == migrated_bytes
     doc = save(client, reloaded, rule())
-    assert json.loads(path.read_bytes())["version"] == 4
+    assert json.loads(path.read_bytes())["version"] == 5
     doc = post(client, doc, "undo")
     assert block(doc)["tags"] == ["旧标签"] and not doc["rules"]
     doc = post(client, doc, "undo")
@@ -189,10 +194,15 @@ def test_portable_rules_and_history_survive_and_dedup_includes_rules(client, tmp
     bundle = client.get(base + "/export/project").content
     store = ProjectStore(tmp_path / "other")
     imported = store.import_file(bundle, "portable.sdoc")
-    assert store.view(imported)["blocks"] == doc["blocks"]
-    assert store.view(imported)["rules"] == doc["rules"]
+    after = store.view(imported)
+    for old, new in zip(doc["blocks"], after["blocks"]):
+        for key in ("id", "text", "role", "tags", "format", "runs", "mixed"):
+            assert new[key] == old[key]
+    assert after["rules"] == []
+    assert imported.legacy_rule_archive.current.rules[0].name == doc["rules"][0]["name"]
     store.history(imported, imported.revision, "undo")
     assert imported.rules == []
+    assert not any(b["overrides"] for b in store.view(imported)["blocks"])
     assert (
         client.post("/api/projects/import", files={"file": ("same.sdoc", bundle)}).json()["id"] == doc["id"]
     )

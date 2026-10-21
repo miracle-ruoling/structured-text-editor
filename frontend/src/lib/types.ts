@@ -31,6 +31,7 @@ export type DocumentView = {
   saved_selectors: SavedSelector[];
   rules: RuleView[];
   chapters: Chapter[]; sections: Section[];
+  legacy_migration?: { archived: boolean; warnings: string[] } | null;
 };
 export type RecentProject = { id: string; name: string; updated_at: string; revision: number };
 export type Condition = { key?: string; field: 'role' | 'tag' | 'context' | 'text' | 'ids' | 'chapter' | 'section'; op: 'is' | 'is_not' | 'contains' | 'not_contains'; value: string; ids?: string[] };
@@ -45,6 +46,12 @@ export type RuleView = FormatRule & { matched_count: number; effective_count: nu
 export type RuleAction = { action: 'save'; rule: FormatRule } | { action: 'delete'; id: string } | { action: 'toggle'; id: string; enabled: boolean } | { action: 'move'; id: string; position: number };
 export type RulePreview = Preview & { label: string; rules: RuleView[]; request: RuleAction };
 export type BulkAnnotation = { action: 'add_tag' | 'remove_tag'; tag: string } | { action: 'set_role'; role: Role } | { action: 'reset_role' };
+export type TemplateEntry = { role: Role; patch: FormatPatch };
+export type FormatTemplate = { version: 1; name: string; entries: TemplateEntry[] };
+export type StoredTemplate = FormatTemplate & { id: string };
+export type TemplateLibrary = { revision: number; items: StoredTemplate[]; deleted: StoredTemplate[] };
+export type TemplatePreview = Preview & { counts: Partial<Record<Role, number>> };
+export type ExtractionGroup = { role: Role; count: number; suggested: number | null; tied: boolean; candidates: { patch: FormatPatch; count: number; example: string; omitted: Record<string, number> }[] };
 export type ExportReport = { revision: number; project_id: string; name: string; source_sha256: string; output_sha256: string; verified: boolean;
   text_preserved: boolean; unselected_preserved: boolean; changed_parts: string[]; preserved_parts: number;
   paragraph_count: number; planned_paragraph_count: number; enabled_rules: number; warnings: string[]; limits: string[];

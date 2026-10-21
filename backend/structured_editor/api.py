@@ -23,7 +23,15 @@ from .domain.models import (
 )
 from .domain.point_selection import adjust_selection
 from .domain.selectors import select
+from .domain.templates import (
+    FormatTemplate,
+    TemplateIdentity,
+    TemplateRequest,
+    TemplateSave,
+    extract_template,
+)
 from .storage import ProjectStore
+from .template_store import TemplateStore
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -32,6 +40,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     app = FastAPI(title="文序", docs_url=None, redoc_url=None)
     store = ProjectStore(data_dir or ROOT / "data")
     app.state.store = store
+    templates = TemplateStore(store.root)
+    app.state.templates = templates
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=["127.0.0.1", "localhost", "testserver"])
 
     @app.middleware("http")
@@ -85,12 +95,12 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if len(content) > MAX_UPLOAD:
             raise ValueError("当前支持最大 30 MB 的文件。")
         with store.lock:
-            return store.view(store.import_file(content, file.filename or "document.docx"))
+            return store.view(store.upgrade(store.import_file(content, file.filename or "document.docx")))
 
     @app.get("/api/projects/{identity}")
     def get_project(identity: str):
         with store.lock:
-            return store.view(store.load(identity))
+            return store.view(store.upgrade(store.load(identity)))
 
     @app.post("/api/projects/{identity}/select")
     def selection(identity: str, selector: Selector):
@@ -161,6 +171,63 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 "Content-Disposition": f"attachment; filename=export{Path(name).suffix}; filename*=UTF-8''{quote(name)}"
             },
         )
+
+    @app.get("/api/templates")
+    def list_templates():
+        with templates.lock:
+            return templates.load().model_dump(exclude_none=True)
+
+    @app.post("/api/templates/save")
+    def save_template(operation: TemplateSave):
+        with templates.lock:
+            return templates.save(operation).model_dump(exclude_none=True)
+
+    @app.post("/api/templates/delete")
+    def delete_template(operation: TemplateIdentity):
+        with templates.lock:
+            return templates.change(operation).model_dump(exclude_none=True)
+
+    @app.post("/api/templates/restore")
+    def restore_template(operation: TemplateIdentity):
+        with templates.lock:
+            return templates.change(operation, restore=True).model_dump(exclude_none=True)
+
+    @app.get("/api/templates/{identity}/export")
+    def export_template(identity: str):
+        with templates.lock:
+            item = next((item for item in templates.load().items if item.id == identity), None)
+            if item is None:
+                raise FileNotFoundError("模板不存在")
+            portable = FormatTemplate(**item.model_dump(exclude={"id"}))
+            return download(portable.model_dump_json(indent=2, exclude_none=True).encode("utf-8"), item.name + ".wxtemplate.json", "application/json")
+
+    @app.post("/api/templates/import")
+    def import_template(file: UploadFile = File(...), revision: int = 0):
+        content = file.file.read(262145)
+        if len(content) > 262144:
+            raise ValueError("模板文件不能超过 256 KB")
+        template = FormatTemplate.model_validate_json(content)
+        with templates.lock:
+            return templates.save(TemplateSave(revision=revision, template=template)).model_dump(exclude_none=True)
+
+    @app.post("/api/projects/{identity}/templates/extract")
+    def extract_roles(identity: str, operation: RevisionRequest):
+        with store.lock:
+            project = store.load(identity)
+            check_revision(project, operation.revision)
+            return {"revision": project.revision, "groups": extract_template(store.view(project)["blocks"])}
+
+    @app.post("/api/projects/{identity}/templates/preview")
+    def preview_template(identity: str, operation: TemplateRequest):
+        with store.lock:
+            return store.prepare_template(store.load(identity), operation)[1]
+
+    @app.post("/api/projects/{identity}/templates/apply")
+    def apply_template(identity: str, operation: TemplateRequest):
+        with store.lock:
+            project = store.load(identity)
+            store.apply_template(project, operation)
+            return store.view(project)
 
     @app.post("/api/projects/{identity}/rules/preview")
     def preview_rule(identity: str, operation: RuleRequest):

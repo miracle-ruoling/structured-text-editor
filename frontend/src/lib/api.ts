@@ -1,4 +1,5 @@
 import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, FormatPatch, Preview, RecentProject, RuleAction, RulePreview, Selector, SizeChange } from './types';
+import type { FormatTemplate, TemplateLibrary, TemplatePreview, ExtractionGroup } from './types';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -22,6 +23,13 @@ async function request<T>(path: string, body?: unknown, form?: FormData, signal?
 }
 
 export const api = {
+  templates: () => request<TemplateLibrary>('/templates'),
+  saveTemplate: (revision: number, template: FormatTemplate, id?: string) => request<TemplateLibrary>('/templates/save', { revision, template, id }),
+  deleteTemplate: (revision: number, id: string, restore = false) => request<TemplateLibrary>(`/templates/${restore ? 'restore' : 'delete'}`, { revision, id }),
+  importTemplate: (revision: number, file: File) => { const form = new FormData(); form.append('file', file); return request<TemplateLibrary>(`/templates/import?revision=${revision}`, undefined, form); },
+  extractTemplate: (doc: DocumentView) => request<{ revision: number; groups: ExtractionGroup[] }>(`/projects/${doc.id}/templates/extract`, { revision: doc.revision }),
+  previewTemplate: (doc: DocumentView, template: FormatTemplate, selector: Selector | null, signal?: AbortSignal) => request<TemplatePreview>(`/projects/${doc.id}/templates/preview`, { revision: doc.revision, template, selector }, undefined, signal),
+  applyTemplate: (doc: DocumentView, template: FormatTemplate, selector: Selector | null) => request<DocumentView>(`/projects/${doc.id}/templates/apply`, { revision: doc.revision, template, selector }),
   recent: () => request<RecentProject[]>('/projects'),
   demo: () => request<DocumentView>('/projects/demo', {}),
   get: (id: string) => request<DocumentView>(`/projects/${id}`),

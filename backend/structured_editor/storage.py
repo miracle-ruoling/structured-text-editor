@@ -17,6 +17,7 @@ from .docx.reader import project_document
 from .docx.sample import PROTECTED_TEXT, create_sample
 from .docx.writer import export_docx
 from .domain.commands import check_revision, commit, touch, travel
+from .domain.migrations import freeze_rules
 from .domain.models import (
     Annotation,
     AnnotationRequest,
@@ -34,6 +35,7 @@ from .domain.pagination import pagination_warnings
 from .domain.rules import changed_rules, resolve
 from .domain.selectors import select
 from .domain.sizes import changed_sizes, size_values
+from .domain.templates import TemplateRequest, template_annotations
 
 
 def atomic_write(path: Path, data: bytes):
@@ -66,6 +68,12 @@ class ProjectStore:
         atomic_write(
             self.folder(project.id) / "project.json", project.model_dump_json(indent=2).encode("utf-8")
         )
+
+    def upgrade(self, project: Project) -> Project:
+        upgraded = freeze_rules(self.original_view(project.id), project)
+        if upgraded is not project:
+            self.save(upgraded)
+        return upgraded
 
     def recent(self) -> list[dict]:
         projects = []
@@ -116,7 +124,7 @@ class ProjectStore:
         identity = uuid.uuid4().hex
         checksum = hashlib.sha256(source).hexdigest()
         if project is None:
-            project = Project(id=identity, name=self.unique_name(name), source_sha256=checksum)
+            project = Project(version=5, id=identity, name=self.unique_name(name), source_sha256=checksum)
         else:
             if project.source_sha256 != checksum:
                 raise ValueError("项目中的原文件校验失败。")
@@ -130,6 +138,8 @@ class ProjectStore:
                         raise ValueError("项目包含无效的逐文字字号定位。")
             project.id = identity
             project.name = self.unique_name(project.name)
+        # Finish migration before creating files, so a failed import leaves no partial project.
+        project = freeze_rules(base, project)
         touch(project)
         folder = self.folder(identity)
         folder.mkdir()
@@ -147,17 +157,24 @@ class ProjectStore:
                 source = archive.read("source.docx")
                 if hashlib.sha256(source).hexdigest() != project.source_sha256:
                     raise ValueError("项目中的原文件校验失败。")
+                base = project_document(DocxPackage(source))
+                project = freeze_rules(base, project)
                 # Reopening a portable snapshot must not create an identical local project.
                 for existing in self.existing_projects():
+                    if existing.source_sha256 != project.source_sha256:
+                        continue
+                    candidate = freeze_rules(base, existing)
                     if (
-                        existing.source_sha256 == project.source_sha256
-                        and existing.annotations == project.annotations
-                        and existing.saved_selectors == project.saved_selectors
-                        and existing.rules == project.rules
-                        and existing.undo == project.undo
-                        and existing.redo == project.redo
+                        candidate.annotations == project.annotations
+                        and candidate.saved_selectors == project.saved_selectors
+                        and candidate.rules == project.rules
+                        and candidate.legacy_rule_archive == project.legacy_rule_archive
+                        and candidate.undo == project.undo
+                        and candidate.redo == project.redo
                     ):
-                        return existing
+                        if candidate is not existing:
+                            self.save(candidate)
+                        return candidate
                 return self.create(source, name, project)
         if not name.lower().endswith(".docx"):
             raise ValueError("请选择 .docx 文件或 .sdoc 文序项目。")
@@ -188,7 +205,33 @@ class ProjectStore:
             "saved_selectors": [s.model_dump(exclude_none=True) for s in project.saved_selectors],
             "undo_label": project.undo[-1].label if project.undo else None,
             "redo_label": project.redo[-1].label if project.redo else None,
+            "legacy_migration": ({"archived": True, "warnings": project.legacy_rule_archive.warnings}
+                                 if project.legacy_rule_archive else None),
         }
+
+    def prepare_template(self, project: Project, request: TemplateRequest):
+        check_revision(project, request.revision)
+        before = self.view(project)
+        annotations, ids, counts, warnings = template_annotations(project.annotations, before["blocks"], request)
+        after = self.view(project.model_copy(update={"annotations": annotations}))
+        selected = set(ids)
+        after_blocks, changes = [], []
+        for old, new in zip(before["blocks"], after["blocks"]):
+            if old["id"] not in selected:
+                continue
+            after_blocks.append({key: new[key] for key in ("id", "format", "runs", "mixed")})
+            if any(old[key] != new[key] for key in ("format", "runs", "mixed")):
+                changes.append({"id": old["id"], "text": old["text"], "before": old["format"], "after": new["format"],
+                                "size_before": size_values(old), "size_after": size_values(new)})
+        return annotations, {"revision": project.revision, "ids": ids, "counts": counts, "changes": changes,
+                             "after_blocks": after_blocks, "warnings": warnings + pagination_warnings(after, selected)}
+
+    def apply_template(self, project: Project, request: TemplateRequest):
+        annotations, preview = self.prepare_template(project, request)
+        if not preview["ids"]:
+            raise ValueError("范围中没有模板对应的可编辑类别")
+        if commit(project, annotations, f"应用模板「{request.template.name}」：{len(preview['ids'])} 段"):
+            self.save(project)
 
     def prepare_format(self, project: Project, request: FormatRequest):
         check_revision(project, request.revision)
@@ -295,6 +338,8 @@ class ProjectStore:
 
     def preview_rule(self, project: Project, request: RuleRequest):
         check_revision(project, request.revision)
+        if project.legacy_rule_archive:
+            raise ValueError("旧规则已冻结，请使用类别模板")
         rules, label = changed_rules(project, request)
         candidate = project.model_copy(update={"rules": rules})
         before = self.view(project)
@@ -318,6 +363,8 @@ class ProjectStore:
 
     def change_rule(self, project: Project, request: RuleRequest):
         check_revision(project, request.revision)
+        if project.legacy_rule_archive:
+            raise ValueError("旧规则已冻结，请使用类别模板")
         rules, label = changed_rules(project, request)
         if commit(project, project.annotations, label, rules=rules):
             self.save(project)

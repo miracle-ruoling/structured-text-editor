@@ -329,6 +329,37 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .range-input-wrap { display: block; min-width: 0; }
 .range-input-tooltip { display: none; position: absolute; z-index: 20; top: 100%; right: 0; width: min(220px, 100%); max-height: 130px; overflow: auto; overflow-wrap: anywhere; white-space: normal; padding: 8px 10px; border: 1px solid #cadbd0; border-radius: 5px; color: #355847; background: #fff; box-shadow: 0 5px 16px #263b2b24; font: 11px/1.7 ui-monospace, Consolas, monospace; user-select: text; }
 .range-input-wrap:hover .range-input-tooltip, .range-input-wrap:focus-within .range-input-tooltip { display: block; }
+
+/* One-shot role templates share the global library, not document selection state. */
+.template-panel { padding: 20px 18px; min-width: 0; }
+.template-panel .help-text { color: #819087; margin: 10px 0; }
+.template-create { display: flex; flex-wrap: wrap; gap: 8px; }
+.template-create .primary { flex-basis: 100%; }
+.template-card { border: 1px solid #e0e9e3; border-radius: 8px; padding: 12px; margin: 14px 0; background: #fbfdfb; min-width: 0; }
+.template-card strong { font-size: 12px; color: #486c58; overflow-wrap: anywhere; }
+.template-card p, .template-card summary { font-size: 11px; color: #84968a; line-height: 1.8; margin: 8px 0; }
+.template-card select { width: 100%; font-size: 11px; }
+.template-actions, .template-add, .template-save { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; }
+.template-actions a { display: inline-flex; align-items: center; gap: 4px; text-decoration: none; }
+.template-add { flex-wrap: nowrap; margin: 12px 0; }
+.template-add select { flex: 1; min-width: 0; }
+.template-add button { flex-shrink: 0; }
+.template-save { margin: 18px 0; }
+.template-save > span { font-size: 10px; color: #87988d; }
+.template-entry { border: 1px solid #e0e9e3; border-radius: 7px; margin-top: 12px; }
+.template-entry > summary { padding: 11px; color: #52725e; font-size: 12px; cursor: pointer; }
+.template-entry > summary span { float: right; font-size: 10px; color: #8b9d91; }
+.template-entry-content { padding: 0 10px 10px; }
+.template-entry-content > .text-button { margin: 5px 0 13px; }
+.template-apply { border-top: 1px solid #e1e9e3; padding-top: 18px; margin-top: 18px; }
+.template-apply .primary { margin-top: 14px; }
+.template-count { font-size: 12px; color: #547660; }
+.template-apply summary, .template-trash summary, .template-migration summary { cursor: pointer; font-size: 11px; color: #6d8a78; }
+.template-trash { margin-top: 20px; }
+.template-trash > div { display: flex; justify-content: space-between; gap: 12px; margin: 12px 0; font-size: 11px; color: #85978b; }
+.template-trash span { overflow-wrap: anywhere; min-width: 0; }
+.template-migration { background: #f3f7f3; border: 1px solid #e1e9e1; border-radius: 6px; padding: 10px; margin-bottom: 18px; }
+.template-migration p { font-size: 11px; line-height: 1.8; color: #849387; }
 .save-selector { display: flex; gap: 6px; margin-top: 13px; }
 .save-selector input { font-size: 11px; }
 .save-selector button { width: 34px; flex-shrink: 0; border: 1px solid var(--line); border-radius: 5px; }

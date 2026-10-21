@@ -5,19 +5,21 @@ import { DraftDialog } from './components/DraftDialog';
 import { ExportInspection } from './components/ExportInspection';
 import { FormatPanel } from './components/FormatPanel';
 import { BulkAnnotations } from './components/BulkAnnotations';
-import { RulePanel } from './components/RulePanel';
+import { TemplatePanel } from './components/TemplatePanel';
 import { ObjectInspector } from './components/ObjectInspector';
 import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
-import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, FormatRule, RecentProject, Role, RuleAction, RulePreview, Selector } from './lib/types';
+import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, RecentProject, Role, Selector, TemplateLibrary, StoredTemplate } from './lib/types';
 import { selectorComplete } from './lib/workspace';
 import { emptyFormatDraft } from './lib/formatDraft';
 import { useFormatPreview } from './lib/useFormatPreview';
 import { useSelection } from './lib/useSelection';
 import { activateSelection, emptySelectionSession, leaveSelection, parseParagraphIds, pointIntent, selectParagraph } from './lib/selection';
 import type { SelectionSession } from './lib/selection';
-import { newRule, ruleDraft, ruleIsDirty } from './lib/rules';
+import { emptyTemplate, templateDraft, templateDirty, extractedEntries } from './lib/templates';
+import type { TemplateDraft, Extraction } from './lib/templates';
+import { useTemplatePreview } from './lib/useTemplatePreview';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 
@@ -31,14 +33,17 @@ export default function App() {
   const { patch, sizeChange } = formatDraft;
   const [report, setReport] = useState<ExportReport | null>(null);
   const [compare, setCompare] = useState(false);
-  const [rule, setRule] = useState<FormatRule | null>(null);
-  const [rulePreview, setRulePreview] = useState<RulePreview | null>(null);
+  const [library, setLibrary] = useState<TemplateLibrary | null>(null);
+  const [template, setTemplate] = useState<TemplateDraft | null>(null);
+  const [extraction, setExtraction] = useState<Extraction | null>(null);
+  const [templateScope, setTemplateScope] = useState<'all' | 'selection'>('all');
+  const [templatePreviewEnabled, setTemplatePreviewEnabled] = useState(true);
   const [bulkTagDraft, setBulkTagDraft] = useState('');
   const [bulkAction, setBulkAction] = useState<BulkAnnotation['action']>('add_tag');
   const [bulkRole, setBulkRole] = useState<Role>('body');
   const [current, setCurrent] = useState<string | null>(null);
   const [tagDraft, setTagDraft] = useState('');
-  const [tab, setTab] = useState<'batch' | 'object' | 'rules'>('batch');
+  const [tab, setTab] = useState<'batch' | 'object' | 'templates'>('batch');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [showTags, setShowTags] = useState(true);
@@ -57,14 +62,17 @@ export default function App() {
   const { ids: matched, matching, error: selectionError } = selection;
   const selectorError = rangeError || (rangeDirty ? '段落编号尚未确认，请按回车或移开焦点完成。' : selectionError);
   // An empty range input is still an unfinished edit and must be protected from document switches.
-  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!saveName.trim() || !!bulkTagDraft.trim() || !!rulePreview || rangeDirty || ruleIsDirty(rule, doc?.rules || []);
+  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!saveName.trim() || !!bulkTagDraft.trim() || !!extraction || rangeDirty || templateDirty(template, library?.items || []);
 
   const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
   const preview = live.preview;
+  const templateScopeReady = selectionActive && !matching && !selectorError && selectorComplete(selector);
+  const templateLive = useTemplatePreview(doc, extraction ? null : template?.template || null, templateScope === 'selection' ? selector : null,
+    tab === 'templates' && !busy && templatePreviewEnabled && (templateScope === 'all' || templateScopeReady));
   const clearFormatDraft = useCallback(() => { setFormatDraft(emptyFormatDraft()); }, []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
-    setDoc(value); setRulePreview(null); setReport(null);
+    setDoc(value); setReport(null);
     void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
     try { localStorage.setItem(LAST_PROJECT, value.id); } catch { /* Content is stored by the local service. */ }
   }, []);
@@ -81,6 +89,7 @@ export default function App() {
         try { document = saved ? await api.get(saved) : await fallback(); }
         catch (error) { if (saved && error instanceof ApiError && error.status === 404) document = await fallback(); else throw error; }
         if (active) acceptDoc(document);
+        try { const value = await api.templates(); if (active) setLibrary(value); } catch (error) { if (active) setMessage({ text: (error as Error).message, error: true }); }
       } catch (error) { if (active) setMessage({ text: (error as Error).message, error: true }); }
       finally { if (active) setBusy(false); }
     }
@@ -118,7 +127,7 @@ export default function App() {
   const history = useCallback((direction: 'undo' | 'redo') => {
     if (!doc || busy || !(direction === 'undo' ? doc.undo_label : doc.redo_label)) return;
     void run(async () => {
-      acceptDoc(await api.history(doc, direction)); clearFormatDraft();
+      acceptDoc(await api.history(doc, direction)); clearFormatDraft(); setTemplatePreviewEnabled(false);
       setMessage({ text: direction === 'undo' ? '已撤销上一次操作' : '已重做操作', error: false });
     });
   }, [doc, busy, run, acceptDoc, clearFormatDraft]);
@@ -127,8 +136,8 @@ export default function App() {
     function onKey(event: KeyboardEvent) {
       if (event.isComposing || pendingSwitch || report) return;
       if (event.defaultPrevented) return;
-      if (event.key === 'Escape' && (rulePreview || (tab === 'batch' && (Object.keys(patch).length || sizeChange))) && !busy) {
-        event.preventDefault(); if (rulePreview) setRulePreview(null); else clearFormatDraft(); return;
+      if (event.key === 'Escape' && ((tab === 'templates' && templatePreviewEnabled) || (tab === 'batch' && (Object.keys(patch).length || sizeChange))) && !busy) {
+        event.preventDefault(); if (tab === 'templates') setTemplatePreviewEnabled(false); else clearFormatDraft(); return;
       }
       const target = event.target as HTMLElement;
       if (target.matches('input, textarea, select') || target.isContentEditable) return;
@@ -138,7 +147,7 @@ export default function App() {
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [history, patch, sizeChange, tab, rulePreview, busy, pendingSwitch, report, clearFormatDraft]);
+  }, [history, patch, sizeChange, tab, templatePreviewEnabled, busy, pendingSwitch, report, clearFormatDraft]);
 
   function changeSelector(value: Selector, explicitAll = false) {
     setRangeError(null);
@@ -163,7 +172,7 @@ export default function App() {
     changeSelector(next);
   }
   function acceptSelection(next: SelectionSession) {
-    setRulePreview(null); setSelectionSession(next); setTab('batch');
+    setSelectionSession(next); setTab('batch');
     if (!next.active) setOnlyMatches(false);
   }
   function exitSelection() {
@@ -175,7 +184,7 @@ export default function App() {
     setSelectionSession(emptySelectionSession());
     setRangeInputs({}); setRangeError(null);
     setSaveName('');
-    setRule(null); setRulePreview(null); setBulkTagDraft('');
+    setTemplate(null); setExtraction(null); setTemplateScope('all'); setTemplatePreviewEnabled(true); setBulkTagDraft('');
     setBulkAction('add_tag'); setBulkRole('body');
   }
   function guardSwitch(action: () => void, objectOnly = false) {
@@ -240,7 +249,7 @@ export default function App() {
   }
   function changePanel(value: typeof tab) {
     if (busy) return;
-    setTab(value); setRulePreview(null);
+    setTab(value);
   }
   function formatObject(id: string) {
     if (busy || !doc?.blocks.some(block => block.id === id && block.editable)) return;
@@ -250,31 +259,51 @@ export default function App() {
     };
     if (id === current) action(); else guardSwitch(action, true);
   }
-  function editRule(value: FormatRule | null) {
-    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setTab('rules'); };
-    if (ruleIsDirty(rule, doc?.rules || [])) setPendingSwitch({ action, objectOnly: false, message: '此规则还有未保存的编辑。继续会丢弃规则草稿；批量格式草稿和已保存的内容不受影响。' });
+  function editTemplate(value: StoredTemplate | null, create = false) {
+    const action = () => { setTemplate(value ? templateDraft(value) : create ? emptyTemplate() : null); setExtraction(null); setTemplatePreviewEnabled(true); setTab('templates'); };
+    if (templateDirty(template, library?.items || []) || extraction) setPendingSwitch({ action, objectOnly: false, message: '模板还有未保存的编辑，继续会丢弃这份模板草稿。已应用的文档格式不受影响。' });
     else action();
   }
-  async function previewRule() {
-    if (!doc || !rule) return;
-    const request: RuleAction = { action: 'save', rule: ruleDraft(rule) };
-    await run(async () => {
-      const result = await api.previewRule(doc, request);
-      setOnlyMatches(false); setRulePreview({ ...result, request });
-    });
-  }
-  async function saveRulePreview() {
-    if (!doc || !rulePreview) return;
-    await run(async () => {
-      acceptDoc(await api.applyRule({ ...doc, revision: rulePreview.revision }, rulePreview.request));
-      setRule(null); setMessage({ text: '持续规则已保存，类别与标签变化后自动重新匹配，可撤销', error: false });
-    });
-  }
-  function changeRule(action: RuleAction) {
+  function refreshTemplates() { void run(async () => { setLibrary(await api.templates()); templateLive.retry(); }); }
+  function extractTemplate() {
     if (!doc) return;
     void run(async () => {
-      acceptDoc(await api.applyRule(doc, action));
-      setMessage({ text: '规则已更新，格式已重新计算，可撤销', error: false });
+      const result = await api.extractTemplate(doc);
+      setExtraction({ ...result, choices: Object.fromEntries(result.groups.map(group => [group.role, group.suggested])) });
+    });
+  }
+  function adoptExtraction() {
+    if (!doc || !extraction || extraction.revision !== doc.revision) return;
+    const entries = extractedEntries(extraction);
+    if (!entries?.length) return;
+    setTemplate({ template: { version: 1, name: (doc.name.replace(/\.docx$/i, '') + ' · 模板').slice(0, 60), entries } });
+    setExtraction(null); setTemplatePreviewEnabled(true);
+  }
+  function saveTemplate(copy = false) {
+    if (!template || !library) return;
+    void run(async () => {
+      const updated = await api.saveTemplate(library.revision, template.template, copy ? undefined : template.id);
+      setLibrary(updated);
+      const saved = updated.items.find(item => item.name === template.template.name.trim());
+      if (saved) setTemplate(templateDraft(saved));
+      setMessage({ text: '模板已保存到本机模板库，可在其他文档使用；文档未因保存而改变', error: false });
+    });
+  }
+  function deleteTemplate(id: string, restore = false) {
+    if (!library) return;
+    void run(async () => { setLibrary(await api.deleteTemplate(library.revision, id, restore)); setMessage({ text: restore ? '模板已恢复' : '模板已删除，可在最近删除中恢复；已应用的文档不变', error: false }); });
+  }
+  function importTemplate(file: File) {
+    if (!library) return;
+    void run(async () => { setLibrary(await api.importTemplate(library.revision, file)); setMessage({ text: '模板已导入本机模板库', error: false }); });
+  }
+  function applyTemplate() {
+    if (!doc || !templateLive.ready || !templateLive.preview) return;
+    const frozen = templateLive.preview;
+    void run(async () => {
+      acceptDoc(await api.applyTemplate({ ...doc, revision: frozen.revision }, frozen.request.template, frozen.request.selector));
+      setTemplatePreviewEnabled(false);
+      setMessage({ text: `模板已应用到 ${frozen.ids.length} 段，可整体撤销；之后改类别不会自动重排`, error: false });
     });
   }
   async function bulkAnnotate(action: BulkAnnotation) {
@@ -282,14 +311,14 @@ export default function App() {
     const count = matched.length;
     return run(async () => {
       acceptDoc(await api.bulkAnnotate(doc, selector, action));
-      setMessage({ text: `已对原筛选范围 ${count} 段执行标注，持续规则已重新匹配，可撤销`, error: false });
+      setMessage({ text: `已对原筛选范围 ${count} 段执行标注，可撤销`, error: false });
     });
   }
   function clearOverrides(id: string, keys: string[]) {
     if (!doc) return;
     void run(async () => {
       acceptDoc(await api.clearOverrides(doc, id, keys));
-      setMessage({ text: '已清除本项目局部覆盖，恢复规则或原文档格式，可撤销', error: false });
+      setMessage({ text: '已清除本项目局部覆盖，恢复原文档对应格式，可撤销', error: false });
     });
   }
 
@@ -338,15 +367,15 @@ export default function App() {
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
         onDeleteSelector={deleteSavedSelector}
         onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
-      <DocumentCanvas doc={doc} matched={tab === 'rules' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
-        onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true)} onFormat={formatObject} preview={rulePreview || preview} patch={{}} livePreview={tab === 'batch'} previewPending={live.pending} previewError={live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (rulePreview) setRulePreview(null); else clearFormatDraft(); }}
-        showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'rules' && onlyMatches}
-        onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'rules' && selectionActive} />
+      <DocumentCanvas doc={doc} matched={tab === 'templates' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
+        onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true)} onFormat={formatObject} preview={tab === 'templates' ? templateLive.preview : preview} patch={{}} livePreview={true} previewPending={tab === 'templates' ? templateLive.pending : live.pending} previewError={tab === 'templates' ? templateLive.error : live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (tab === 'templates') setTemplatePreviewEnabled(false); else clearFormatDraft(); }}
+        showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'templates' && onlyMatches}
+        onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'templates' && selectionActive} />
       <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
           <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />操作</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => changePanel('object')}><Fingerprint size={15} />对象属性</button>
-          <button disabled={busy} role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'active' : ''} onClick={() => changePanel('rules')}><Layers size={15} />规则</button>
+          <button disabled={busy} role="tab" aria-selected={tab === 'templates'} className={tab === 'templates' ? 'active' : ''} onClick={() => changePanel('templates')}><Layers size={15} />模板</button>
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
@@ -361,13 +390,14 @@ export default function App() {
             busy={busy} count={matched.length} ready={live.ready} pending={live.pending} error={live.error}
             selectionActive={selectionActive} blocks={doc.blocks} matched={matched}
             onRetry={() => { if (live.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else live.retry(); }} />
-        </fieldset> : tab === 'rules' ? <RulePanel rules={doc.rules} draft={rule} preview={rulePreview} busy={busy} chapters={doc.chapters} sections={doc.sections}
-          canUseScope={selectionActive && selectorComplete(selector) && !matching && !selectorError}
-          onCreate={() => editRule(newRule(crypto.randomUUID().replaceAll('-', ''), selector))} onEdit={editRule}
-          onChange={value => { setRule(value); setRulePreview(null); }} onDiscard={() => editRule(null)}
-          onUseScope={() => { if (rule) { setRule({ ...rule, selector: structuredClone(selector) }); setRulePreview(null); } }}
-          onLoadScope={() => { if (rule) changeSelector(structuredClone(rule.selector), true); }}
-          onPreview={() => void previewRule()} onApply={() => void saveRulePreview()} onCancel={() => setRulePreview(null)} onAction={changeRule}
+        </fieldset> : tab === 'templates' ? <TemplatePanel doc={doc} library={library} draft={template} extraction={extraction} busy={busy}
+          dirty={templateDirty(template, library?.items || [])} preview={templateLive.preview} ready={templateLive.ready} pending={templateLive.pending} error={templateLive.error}
+          scope={templateScope} scopeReady={templateScopeReady} scopeCount={matched.length} onScope={value => { setTemplateScope(value); setTemplatePreviewEnabled(true); }}
+          previewEnabled={templatePreviewEnabled} onPreviewToggle={() => setTemplatePreviewEnabled(value => !value)}
+          onRefresh={refreshTemplates} onNew={() => editTemplate(null, true)} onEdit={editTemplate} onBack={() => editTemplate(null)}
+          onRetry={() => { if (templateLive.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else templateLive.retry(); }}
+          onChange={value => { setTemplate(value); setTemplatePreviewEnabled(true); }} onExtract={extractTemplate} onExtraction={setExtraction} onAdopt={adoptExtraction}
+          onSave={saveTemplate} onDelete={deleteTemplate} onImport={importTemplate} onApply={applyTemplate}
         /> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}

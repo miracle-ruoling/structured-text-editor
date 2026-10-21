@@ -20,6 +20,18 @@ const noop = () => {};
 const paragraph: Block = { id: 'p3', kind: 'paragraph', text: '混合字号', role: 'body', tags: [], in_table: false, editable: true, confirmed: false, style_id: '', style_name: '正文', role_source: '自动识别', format: { size_pt: 18 }, format_sources: { size_pt: '规则：正文' }, mixed: [], features: [], overrides: {}, format_trace: {}, runs: [{ text: '混合', format: { size_pt: 18 } }, { text: '字号', format: { size_pt: 18 } }] };
 const draft: FormatRule = { id: 'a'.repeat(32), name: '正文', selector: { mode: 'all', conditions: [] }, patch: { size_pt: 18, first_line_chars: 2 }, enabled: true };
 
+test('模板保存与应用分离，预览过期或零命中不能提交', () => {
+  const props = { doc: { revision: 1 }, library: { revision: 0, items: [], deleted: [] }, draft: { template: { version: 1, name: '报告', entries: [{ role: 'body', patch: { size_pt: 14 } }] } }, extraction: null,
+    busy: false, dirty: true, preview: { ids: ['p3'], counts: { body: 1 }, changes: [], warnings: [] }, ready: false, pending: true, error: null, scope: 'selection', scopeReady: false, scopeCount: 1, previewEnabled: true, onPreviewToggle: noop };
+  const html = render(ui.TemplatePanel, props);
+  assert.match(html, /请先在操作页设置并确认筛选范围/);
+  assert.match(html, /disabled="">应用到文档/);
+  assert.match(html, /保存模板只更新模板库/);
+  assert.doesNotMatch(html, /持续格式规则|从当前筛选新建规则/);
+  assert.doesNotMatch(render(ui.TemplatePanel, { ...props, ready: true, pending: false, scopeReady: true }), /disabled="">应用到文档/);
+  assert.match(render(ui.TemplatePanel, { ...props, ready: true, preview: { ids: [], counts: {}, changes: [] } }), /disabled="">应用到文档/);
+});
+
 test('规则预览使用完整的逐段结果，恢复混合字号时不残留统一字号', () => {
   const afterBlock = { ...paragraph, format: {}, mixed: ['size_pt'], runs: [{ text: '混合', format: { size_pt: 12 } }, { text: '字号', format: { size_pt: 24 } }] };
   const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: [], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, showTags: true, onlyMatches: false, zoom: 100, busy: false });

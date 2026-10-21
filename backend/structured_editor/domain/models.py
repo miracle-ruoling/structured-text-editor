@@ -209,8 +209,16 @@ class Snapshot(Model):
     rules: list[FormatRule] = Field(default_factory=list, max_length=50)
 
 
+class LegacyRuleArchive(Model):
+    revision: int
+    current: Snapshot
+    undo: list[Snapshot] = Field(max_length=50)
+    redo: list[Snapshot] = Field(max_length=50)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class Project(Model):
-    version: Literal[4] = 4
+    version: Literal[4, 5] = 5
     id: str
     name: str
     source_sha256: str
@@ -221,6 +229,7 @@ class Project(Model):
     undo: list[Snapshot] = Field(default_factory=list, max_length=50)
     redo: list[Snapshot] = Field(default_factory=list, max_length=50)
     updated_at: str = ""
+    legacy_rule_archive: LegacyRuleArchive | None = None
 
     @model_validator(mode="before")
     @classmethod
