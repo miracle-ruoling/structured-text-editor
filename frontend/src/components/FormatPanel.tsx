@@ -1,30 +1,44 @@
-import { ArrowRight, Eye, LockKeyhole, RotateCcw, WrapText } from 'lucide-react';
-import { useState } from 'react';
-import type { FormatPatch, Preview, SizeChange } from '../lib/types';
+import { ArrowRight, Check, LoaderCircle, X } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import type { Block, Preview } from '../lib/types';
 import { formatLabels, formatValue, sizeValues } from '../lib/types';
-import { scopedPatch, scopedSizeChange, validSizeChange } from '../lib/workspace';
-import type { FormatTab } from '../lib/workspace';
+import type { FormatDraft } from '../lib/formatDraft';
+import { inputSize, stepSize } from '../lib/formatDraft';
 import { FormatFields } from './FormatFields';
+import { HelpTip } from './HelpTip';
 
-type Props = { patch: FormatPatch; onChange: (patch: FormatPatch) => void; preview: Preview | null; onPreview: () => void; onApply: () => void; onCancel: () => void; busy: boolean; count: number; tab: FormatTab; onTab: (tab: FormatTab) => void; locked: boolean; onLock: (locked: boolean) => void; includeOther: boolean; onIncludeOther: (value: boolean) => void; sizeChange: SizeChange | null; onSizeChange: (value: SizeChange | null) => void; };
+type Props = {
+  draft: FormatDraft; onChange: (draft: FormatDraft) => void; preview: Preview | null;
+  onApply: () => void; onCancel: () => void; onRetry: () => void; busy: boolean; count: number;
+  ready: boolean; pending: boolean; error: string | null; selectionActive: boolean;
+  blocks: Block[]; matched: string[];
+};
 
-export function FormatPanel({ patch, onChange, preview, onPreview, onApply, onCancel, busy, count, tab, onTab, locked, onLock, includeOther, onIncludeOther, sizeChange, onSizeChange }: Props) {
+export function FormatPanel({ draft, onChange, preview, onApply, onCancel, onRetry, busy, count, ready, pending, error, selectionActive, blocks, matched }: Props) {
   const [visibleChanges, setVisibleChanges] = useState(30);
-  const submitted = scopedPatch(patch, tab, includeOther);
-  const submittedSize = scopedSizeChange(sizeChange, tab, includeOther);
-  const otherCount = Object.keys(scopedPatch(patch, tab === 'font' ? 'paragraph' : 'font', false)).length + (tab === 'paragraph' && sizeChange ? 1 : 0);
+  const { patch, sizeChange } = draft;
+  const countFields = Object.keys(patch).length + (sizeChange ? 1 : 0);
+  const sizePlaceholder = useMemo(() => {
+    if (pending) return '更新中…';
+    const ids = new Set(matched);
+    const selected = ready && preview?.after_blocks ? preview.after_blocks : blocks.filter(b => ids.has(b.id));
+    const values = new Set(selected.flatMap(b => b.runs.length ? b.runs.map(r => r.format.size_pt ?? null) : [b.format.size_pt ?? null]));
+    return values.size === 1 && !values.has(null) ? `当前 ${[...values][0]}` : values.size > 1 ? '混合字号' : '保持原样';
+  }, [blocks, matched, preview, ready, pending]);
   return <>
-    <section className="format-section">
-      <div className="section-heading"><span><WrapText size={16} />调整格式</span><button className="text-button" disabled={!Object.keys(patch).length && !sizeChange} onClick={() => { onChange({}); onSizeChange(null); }}><RotateCcw size={12} />清空全部</button></div>
-      <FormatFields patch={patch} onChange={onChange} tab={tab} onTab={onTab} sizeChange={sizeChange} onSizeChange={onSizeChange} />
-      <label className="check-option scope-option"><input type="checkbox" checked={includeOther} onChange={e => onIncludeOther(e.target.checked)} /><span>同时应用{tab === 'font' ? '段落' : '文字'}页的 {otherCount} 项设置</span></label>
-      <label className="check-option"><input type="checkbox" checked={locked} onChange={e => onLock(e.target.checked)} /><LockKeyhole size={13} /><span>锁定草稿，应用后保留</span></label>
-      <p className="scope-note">{includeOther ? '本次包含文字和段落两页' : `本次只应用${tab === 'font' ? '文字' : '段落'}页`} · {locked ? '已锁定' : '应用后清空全部草稿'}</p>
-      <p className="help-text">留空的属性保持原样。此处提交为局部覆盖，优先于持续规则。</p>
-      {submittedSize && <><div className="relative-summary">字号增减：{submittedSize.amount > 0 ? '+' : ''}{submittedSize.amount || '待填写'} {submittedSize.mode === 'points' ? '磅' : '级'} · 按各文字片段计算</div>{!validSizeChange(submittedSize) && <p className="selector-error">请填写有效的非零增减值（磅数半磅步进，中文字号整数级数）。</p>}{locked && <p className="help-text">已锁定增减操作，每次应用会基于当时字号重新计算。</p>}</>}
-      {!!Object.keys(submitted).length && <div className="patch-chips" aria-label="本次提交属性">{Object.entries(submitted).map(([key, value]) => <span key={key}>{formatLabels[key]} · {formatValue(key, value)}</span>)}</div>}
+    <section className="format-section compact-format">
+      <div className="section-heading"><span>格式 <HelpTip text="修改会自动预览，点击应用才保存。所有填写的属性一起提交，折叠分组不排除设置。取消修改或 Esc 恢复已保存视图；已应用的结果可撤销。" /></span><span className="auto-preview-label">自动预览</span></div>
+      <FormatFields patch={patch} onChange={value => onChange({ ...draft, patch: value })} sizeChange={sizeChange}
+        onSizeInput={value => onChange(inputSize(draft, value))} onSizeStep={direction => { const next = stepSize(draft, direction); if (next) onChange(next); }}
+        sizePlaceholder={sizePlaceholder} canGrow={stepSize(draft, 1) != null} canShrink={stepSize(draft, -1) != null} />
     </section>
-    {preview && <section className="preview-summary"><div className="section-heading"><span><Eye size={15} />修改预览</span><span>{preview.ids.length} 段</span></div><div className="change-list">{preview.changes.slice(0, visibleChanges).map(change => <div className="change-item" key={change.id}><strong>{change.id.toUpperCase()} · {change.text.slice(0, 24) || '空段落'}{change.text.length > 24 ? '…' : ''}</strong>{Object.entries(change.after).map(([key, value]) => <div key={key}><span>{formatLabels[key]}：{key === 'size_pt' && change.size_before ? sizeValues(change.size_before) : formatValue(key, change.before[key as keyof typeof change.before])}</span><ArrowRight size={11} /><b>{key === 'size_pt' && change.size_after ? sizeValues(change.size_after) : formatValue(key, value)}</b></div>)}</div>)}</div>{preview.changes.length > visibleChanges && <button className="secondary full" onClick={() => setVisibleChanges(visibleChanges + 30)}>再显示 30 段（共 {preview.changes.length} 段）</button>}</section>}
-    <div className="operation-footer">{preview ? <><button className="primary full" disabled={busy || !preview.ids.length} onClick={onApply}>应用到 {preview.ids.length} 个段落<ArrowRight size={16} /></button><button className="secondary full cancel-preview" disabled={busy} onClick={onCancel}>退出预览 · Esc</button></> : <><button className="primary full" disabled={busy || !count || (!Object.keys(submitted).length && !submittedSize) || !validSizeChange(submittedSize)} onClick={() => { setVisibleChanges(30); onPreview(); }}><Eye size={16} />预览修改</button><span className="footer-hint">先看效果，再决定是否应用</span></>}</div>
+    <div className="operation-footer live-operation">
+      {!!countFields && <div className="draft-summary"><span>待应用 · {countFields} 项</span><div className="patch-chips" aria-label="本次全部提交属性">{Object.entries(patch).map(([key, value]) => <span key={key}>{formatLabels[key]} · {formatValue(key, value)}<button disabled={busy} aria-label={`取消${formatLabels[key]}修改`} title="移除此项设置" onClick={() => { const next = { ...patch }; delete next[key as keyof typeof next]; onChange({ ...draft, patch: next }); }}><X size={11} /></button></span>)}{sizeChange && <span>各自字号 {sizeChange.amount > 0 ? '+' : ''}{sizeChange.amount} 级<button disabled={busy} aria-label="取消字号增减" onClick={() => onChange({ ...draft, sizeChange: null })}><X size={11} /></button></span>}</div></div>}
+      {error && <div className="live-error" role="alert"><p>{error}</p><button className="text-button" disabled={busy} onClick={onRetry}>重试 / 同步状态</button></div>}
+      {ready && preview?.warnings?.map(warning => <p className="scope-warning" key={warning}>{warning}</p>)}
+      <div className="live-preview-status" role="status">{pending ? <><LoaderCircle size={13} className="spin" />正在更新预览…</> : ready ? <><Check size={13} />{count} 段预览已更新，尚未保存</> : !selectionActive ? '先选择操作范围' : error ? '预览未完成，不能应用' : countFields ? (count ? '等待有效范围' : '没有匹配段落') : '修改设置即可预览'}</div>
+      <div className="live-actions"><button className="secondary" disabled={busy || !countFields} onClick={onCancel} title="清空格式草稿并恢复已保存视图 · Esc">取消修改</button><button className="primary" disabled={busy || !ready || !preview?.ids.length} onClick={onApply}>应用到 {count} 段<ArrowRight size={15} /></button></div>
+      {ready && preview && <details className="change-details"><summary>查看逐段差异 · {preview.changes.length} 段</summary><div className="change-list">{preview.changes.slice(0, visibleChanges).map(change => <div className="change-item" key={change.id}><strong>{change.id.toUpperCase()} · {change.text.slice(0, 24) || '空段落'}</strong>{Object.entries(change.after).map(([key, value]) => <div key={key}><span>{formatLabels[key]}：{key === 'size_pt' && change.size_before ? sizeValues(change.size_before) : formatValue(key, change.before[key as keyof typeof change.before])}</span><ArrowRight size={11} /><b>{key === 'size_pt' && change.size_after ? sizeValues(change.size_after) : formatValue(key, value)}</b></div>)}</div>)}</div>{preview.changes.length > visibleChanges && <button className="secondary full" onClick={() => setVisibleChanges(visibleChanges + 30)}>再显示 30 段</button>}</details>}
+    </div>
   </>;
 }

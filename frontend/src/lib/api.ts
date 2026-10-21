@@ -4,15 +4,16 @@ export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
 }
 
-async function request<T>(path: string, body?: unknown, form?: FormData): Promise<T> {
+async function request<T>(path: string, body?: unknown, form?: FormData, signal?: AbortSignal): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, {
+      signal,
       method: body !== undefined || form ? 'POST' : 'GET',
       headers: body !== undefined ? { 'Content-Type': 'application/json' } : undefined,
       body: form || (body !== undefined ? JSON.stringify(body) : undefined),
     });
-  } catch { throw new ApiError('暂时无法连接本机服务，请检查启动窗口是否仍在运行。', 0); }
+  } catch (error) { if (signal?.aborted) throw error; throw new ApiError('暂时无法连接本机服务，请检查启动窗口是否仍在运行。', 0); }
   if (!response.ok) {
     const result = await response.json().catch(() => ({}));
     throw new ApiError(result.detail || `请求失败（${response.status}）`, response.status);
@@ -26,7 +27,7 @@ export const api = {
   get: (id: string) => request<DocumentView>(`/projects/${id}`),
   import: (file: File) => { const form = new FormData(); form.append('file', file); return request<DocumentView>('/projects/import', undefined, form); },
   select: (id: string, selector: Selector) => request<{ ids: string[]; revision: number }>(`/projects/${id}/select`, selector),
-  preview: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null) => request<Preview>(`/projects/${doc.id}/preview`, { revision: doc.revision, selector, patch, size_change }),
+  preview: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null, signal?: AbortSignal) => request<Preview>(`/projects/${doc.id}/preview?compact=true`, { revision: doc.revision, selector, patch, size_change }, undefined, signal),
   apply: (doc: DocumentView, selector: Selector, patch: FormatPatch, size_change: SizeChange | null = null) => request<DocumentView>(`/projects/${doc.id}/apply`, { revision: doc.revision, selector, patch, size_change }),
   report: (doc: DocumentView) => request<ExportReport>(`/projects/${doc.id}/export/report`),
   annotate: (doc: DocumentView, id: string, patch: AnnotationPatch) => request<DocumentView>(`/projects/${doc.id}/annotate`, { revision: doc.revision, ids: [id], ...patch }),

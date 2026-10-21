@@ -1,9 +1,9 @@
 import { Eye, FileSearch, Info, LockKeyhole, MousePointer2, PanelLeftClose, ScanLine, Table2, Tag } from 'lucide-react';
 import type { CSSProperties } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { ObjectQuickMenu } from './ObjectQuickMenu';
 import type { QuickMenuTarget } from './ObjectQuickMenu';
-import type { Block, DocumentView, Format, FormatPatch, Layout, Preview } from '../lib/types';
+import type { Block, DocumentView, Format, FormatPatch, Layout, Preview, PreviewBlock } from '../lib/types';
 import { roles } from '../lib/types';
 import { paragraphInsets } from '../lib/workspace';
 
@@ -11,6 +11,7 @@ type Props = {
   doc: DocumentView; matched: string[]; current: string | null; onPick: (id: string) => void;
   preview: Preview | null; patch: FormatPatch; showTags: boolean; onShowTags: () => void;
   onlyMatches: boolean; onOnlyMatches: () => void; zoom: number; onZoom: (value: number) => void;
+  livePreview?: boolean; previewPending?: boolean; previewError?: string | null; compare?: boolean; onCompare?: () => void;
   onExitPreview: () => void; selectionActive: boolean; busy: boolean;
   marking: boolean; marked: string[]; onMarking: () => void; onMark: (id: string) => void;
   onClearMarks: () => void; onAddRange: () => void; onFormat: (id: string) => void;
@@ -26,7 +27,19 @@ function typography(format: Format): CSSProperties {
   };
 }
 
-export function DocumentCanvas({ doc, matched, current, onPick, preview, patch, showTags, onShowTags, onlyMatches, onOnlyMatches, zoom, onZoom, onExitPreview, selectionActive, busy, marking, marked, onMarking, onMark, onClearMarks, onAddRange, onFormat }: Props) {
+const EMPTY_PATCH: FormatPatch = {};
+const ParagraphText = memo(function ParagraphText({ block, resolved = block, override = EMPTY_PATCH }: { block: Block; resolved?: PreviewBlock; override?: FormatPatch }) {
+  const format = { ...resolved.format, ...override };
+  const style: CSSProperties = {
+    ...typography(format), ...paragraphInsets(format),
+    lineHeight: format.line_spacing ?? (format.line_spacing_pt ? `${format.line_spacing_pt}pt` : undefined),
+    textAlign: format.alignment === 'both' ? 'justify' : format.alignment as CSSProperties['textAlign'],
+    marginTop: `${format.space_before_pt ?? 0}pt`, marginBottom: `${format.space_after_pt ?? 4}pt`,
+  };
+  return <p className="paragraph-text" style={style}>{resolved.runs.length ? resolved.runs.map((run, index) => <span key={index} style={typography({ ...run.format, ...override })}>{run.text}</span>) : <span className="empty-paragraph">{block.features.length ? '' : '空段落'}</span>}</p>;
+});
+
+export function DocumentCanvas({ doc, matched, current, onPick, preview, patch, showTags, onShowTags, onlyMatches, onOnlyMatches, zoom, onZoom, onExitPreview, selectionActive, busy, marking, marked, onMarking, onMark, onClearMarks, onAddRange, onFormat, livePreview = false, previewPending = false, previewError = null, compare = true, onCompare }: Props) {
   const [menu, setMenu] = useState<QuickMenuTarget | null>(null);
   const closeMenu = useCallback(() => setMenu(null), []);
   useEffect(() => { setMenu(null); }, [doc.id, doc.revision, busy]);
@@ -43,22 +56,14 @@ export function DocumentCanvas({ doc, matched, current, onPick, preview, patch, 
   }
   function paragraph(block: Block) {
     const pending = previewSet.has(block.id);
-    function textView(override: FormatPatch = {}, resolved: Block = block) {
-      const format = { ...resolved.format, ...override };
-      const style: CSSProperties = {
-        ...typography(format), ...paragraphInsets(format),
-        lineHeight: format.line_spacing ?? (format.line_spacing_pt ? `${format.line_spacing_pt}pt` : undefined),
-        textAlign: format.alignment === 'both' ? 'justify' : format.alignment as CSSProperties['textAlign'],
-        marginTop: `${format.space_before_pt ?? 0}pt`, marginBottom: `${format.space_after_pt ?? 4}pt`,
-      };
-      return <p className="paragraph-text" style={style}>{resolved.runs.length ? resolved.runs.map((run, index) => <span key={index} style={typography({ ...run.format, ...override })}>{run.text}</span>) : <span className="empty-paragraph">{block.features.length ? '' : '空段落'}</span>}</p>;
-    }
-    return <div key={block.id} id={`block-${block.id}`} role="button" tabIndex={0} aria-label={`${block.id.toUpperCase()} ${roles[block.role]}：${block.text.slice(0, 40) || '空段落'}`} onContextMenu={e => { if (!busy) { e.preventDefault(); setMenu({ id: block.id, x: e.clientX, y: e.clientY, anchor: e.currentTarget }); } }} onClick={() => onPick(block.id)} onKeyDown={e => { if (!busy && e.target === e.currentTarget && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) { e.preventDefault(); const box = e.currentTarget.getBoundingClientRect(); setMenu({ id: block.id, x: box.left + 20, y: box.top + 20, anchor: e.currentTarget }); return; } if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPick(block.id); } }} className={`document-block ${block.role} ${matchSet.has(block.id) ? 'matched' : ''} ${current === block.id ? 'focused' : ''} ${pending ? 'pending' : ''} ${!block.editable ? 'locked' : ''}`}>
+    const after = afterById.get(block.id);
+    const textView = (changed = false) => <ParagraphText block={block} resolved={changed && after ? after : block} override={changed && !after ? patch : EMPTY_PATCH} />;
+    return <div key={block.id} id={`block-${block.id}`} role="button" tabIndex={0} aria-label={`${block.id.toUpperCase()} ${roles[block.role]}：${block.text.slice(0, 40) || '空段落'}`} onContextMenu={e => { if (!busy) { e.preventDefault(); setMenu({ id: block.id, x: e.clientX, y: e.clientY, anchor: e.currentTarget }); } }} onClick={() => onPick(block.id)} onKeyDown={e => { if (!busy && e.target === e.currentTarget && (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10'))) { e.preventDefault(); const box = e.currentTarget.getBoundingClientRect(); setMenu({ id: block.id, x: box.left + 20, y: box.top + 20, anchor: e.currentTarget }); return; } if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPick(block.id); } }} className={`document-block ${block.role} ${matchSet.has(block.id) ? 'matched' : ''} ${current === block.id ? 'focused' : ''} ${pending ? (livePreview && !compare ? 'pending live-pending' : 'pending') : ''} ${!block.editable ? 'locked' : ''}`}>
       <span className="block-index">{block.id.slice(1).padStart(2, '0')}</span>
       <div className="block-content">
       {marking && <label className="block-mark" onClick={e => e.stopPropagation()}><input type="checkbox" aria-label={`框选段落 ${block.id.toUpperCase()}`} disabled={busy || !block.editable} checked={markedSet.has(block.id)} onChange={() => onMark(block.id)} /><span>{markedSet.has(block.id) ? '已框选' : '加入框选'}</span></label>}
       {showTags && <div className="block-labels"><span className={`role-badge ${block.role}`} title={`${block.confirmed ? '手动设置' : '自动识别'} · ${block.role_source}`}>{roles[block.role]}</span>{block.tags.map(tag => <span className={`tag-badge ${tag === '保留原格式' ? 'protected' : ''}`} key={tag}><Tag size={9} />{tag}</span>)}{!block.editable && <span className="locked-badge"><LockKeyhole size={10} />仅查看</span>}{pending && <span className="pending-label">预览中</span>}</div>}
-      {pending ? <div className="paragraph-comparison"><div className="comparison-before"><span className="comparison-label">修改前</span>{textView()}</div><div className="comparison-after"><span className="comparison-label">预览后 · 尚未应用</span>{afterById.has(block.id) ? textView({}, afterById.get(block.id)) : textView(patch)}</div></div> : textView()}
+      {pending && (!livePreview || compare) ? <div className="paragraph-comparison"><div className="comparison-before"><span className="comparison-label">修改前</span>{textView()}</div><div className="comparison-after"><span className="comparison-label">预览后 · 尚未应用</span>{textView(true)}</div></div> : textView(pending)}
       {block.features.map(feature => <div className="feature-placeholder" key={feature}><ScanLine size={14} />{feature}</div>)}
       </div>
     </div>;
@@ -72,11 +77,11 @@ export function DocumentCanvas({ doc, matched, current, onPick, preview, patch, 
   }
   return <main className="canvas-area">
     <div className="canvas-heading"><div className="breadcrumb"><span>文档空间</span><span>/</span><strong>{doc.name}</strong></div><span className="view-mode"><span className="status-dot" />本地工作区</span></div>
-    <div className="canvas-toolbar"><div><span className="active-view"><FileSearch size={15} />结构视图</span><span className="view-description">让每次修改都有明确的范围</span></div><div className="view-actions"><button aria-pressed={marking} title="手动框选段落，显式加入筛选条件" disabled={busy} onClick={onMarking}><MousePointer2 size={14} /><span>框选</span></button><button aria-pressed={showTags} title="显示或隐藏类别与标签" onClick={onShowTags}><Tag size={14} /><span>标记</span></button><button aria-pressed={onlyMatches} title="只显示匹配的段落" disabled={!selectionActive} onClick={onOnlyMatches}><PanelLeftClose size={14} /><span>仅匹配</span></button><select aria-label="文档缩放" value={zoom} onChange={e => onZoom(Number(e.target.value))}>{[80, 90, 100, 110, 125].map(value => <option key={value} value={value}>{value}%</option>)}</select></div></div>
+    <div className="canvas-toolbar"><div><span className="active-view"><FileSearch size={15} />结构视图</span></div><div className="view-actions"><button aria-pressed={marking} title="手动框选段落，显式加入筛选条件" disabled={busy} onClick={onMarking}><MousePointer2 size={14} /><span>框选</span></button><button aria-pressed={showTags} title="显示或隐藏类别与标签" onClick={onShowTags}><Tag size={14} /><span>标记</span></button><button aria-pressed={onlyMatches} title="只显示匹配的段落" disabled={!selectionActive} onClick={onOnlyMatches}><PanelLeftClose size={14} /><span>仅匹配</span></button><select aria-label="文档缩放" value={zoom} onChange={e => onZoom(Number(e.target.value))}>{[80, 90, 100, 110, 125].map(value => <option key={value} value={value}>{value}%</option>)}</select></div></div>
     {marking && <div className="marking-banner"><span><strong>框选 {marked.length} 段</strong> · 加入条件后才参与格式操作</span><button className="secondary" disabled={busy || !marked.length} onClick={onAddRange}>加入筛选条件</button><button className="text-button" disabled={busy || !marked.length} onClick={onClearMarks}>清空框选</button></div>}
-    {preview && <div className="preview-banner"><Eye size={16} /><span><strong>正在预览</strong> · {preview.ids.length} 个段落的上下对比，尚未应用</span><button className="secondary" disabled={busy} onClick={onExitPreview}>退出预览 · Esc</button></div>}
+    {(preview || (livePreview && (previewPending || previewError))) && <div className={`preview-banner ${previewPending || previewError ? 'preview-stale' : ''}`}><Eye size={16} /><span><strong>{previewError ? '预览未完成' : previewPending ? '预览更新中…' : '预览 · 未应用'}</strong>{preview && (previewPending || previewError) ? ' · 当前仍为上次效果' : preview ? ` · ${preview.ids.length} 段` : ''}</span>{livePreview && <button className="text-button" aria-pressed={compare} onClick={onCompare} title="切换原文与结果的上下对照">{compare ? '关闭原文对照' : '对照原文'}</button>}<button className="secondary" disabled={busy} onClick={onExitPreview}>{livePreview ? '取消修改 · Esc' : '退出预览 · Esc'}</button></div>}
     <div className="canvas-scroll">
-      <div className="reading-note"><Info size={13} /><span>结构阅读视图 · 缩进按阅读宽度适配；Word 中的原始排版以导出文件为准</span>{doc.warnings.length > 0 && <details className="warnings"><summary>{doc.warnings.length} 项说明</summary><div>{doc.warnings.map(w => <p key={w}>{w}</p>)}</div></details>}</div>
+      <div className="reading-note"><Info size={13} /><span title="缩进按屏幕宽度适配；字体替代与精确分页以 Word 为准。">近似排版</span>{doc.warnings.length > 0 && <details className="warnings"><summary>{doc.warnings.length} 项说明</summary><div>{doc.warnings.map(w => <p key={w}>{w}</p>)}</div></details>}</div>
       {onlyMatches && !matched.length ? <div className="empty-state"><FileSearch size={32} /><h3>没有匹配的段落</h3><p>调整右侧条件，或关闭「仅匹配」查看完整文档。</p></div> : <article className="document-paper" style={{ zoom: zoom / 100 }} aria-label="文档结构阅读区"><div className="paper-eyebrow"><span>DOCUMENT</span><span>{doc.blocks.length} 段 · 可见的结构</span></div>{render(doc.layout)}<div className="paper-end"><span />文档结束<span /></div></article>}
     </div>
     {menu && byId.has(menu.id) && <ObjectQuickMenu block={byId.get(menu.id)!} target={menu} marked={markedSet.has(menu.id)} onClose={closeMenu} onPick={onPick} onFormat={onFormat} onMark={id => { if (!marking) onMarking(); onMark(id); }} />}

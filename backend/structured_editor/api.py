@@ -97,9 +97,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             return {"revision": project.revision, "ids": select(store.view(project)["blocks"], selector)}
 
     @app.post("/api/projects/{identity}/preview")
-    def preview(identity: str, operation: FormatRequest):
+    def preview(identity: str, operation: FormatRequest, compact: bool = False):
         with store.lock:
-            return store.preview(store.load(identity), operation)
+            return store.preview(store.load(identity), operation, compact=compact)
 
     @app.post("/api/projects/{identity}/apply")
     def apply(identity: str, operation: FormatRequest):

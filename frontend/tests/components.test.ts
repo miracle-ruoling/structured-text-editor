@@ -68,25 +68,34 @@ test('未启用筛选时不渲染活动条件、表达式和保存区域', () =>
 });
 
 
-test('相对字号单独可预览，切到段落页后不夹带文字操作', () => {
-  const props = { patch: {}, sizeChange: { mode: 'points', amount: 1 }, onSizeChange: noop, onChange: noop, preview: null, count: 2, tab: 'font', locked: true, includeOther: false, busy: false };
-  const html = render(ui.FormatPanel, props);
-  assert.match(html, /按各自字号增减磅数/);
-  assert.match(html, /每次应用会基于当时字号重新计算/);
-  assert.doesNotMatch(html, /class="primary full" disabled/);
-  const paragraphHtml = render(ui.FormatPanel, { ...props, tab: 'paragraph' });
-  assert.match(paragraphHtml, /class="primary full" disabled/);
-  assert.match(paragraphHtml, /同时应用文字页的 1 项设置/);
-  assert.doesNotMatch(paragraphHtml, /relative-summary/);
+test('字号输入与两个步进按钮、折叠分组共同提交，不再锁定或按页隐藏范围', () => {
+  const html = render(ui.FormatPanel, { draft: { patch: { bold: false, first_line_chars: 2 }, sizeChange: { mode: 'chinese_steps', amount: 2 } }, onChange: noop, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [] }, ready: true, pending: false, error: null, count: 1, blocks: [paragraph], matched: ['p3'], selectionActive: true, busy: false });
+  assert.match(html, /aria-label="字号"/);
+  assert.match(html, /aria-label="增大一级字号"/);
+  assert.match(html, /aria-label="缩小一级字号"/);
+  assert.match(html, /各自字号 \+2 级/);
+  assert.match(html, /首行缩进 · 2 字符/);
+  assert.match(html, /粗体 · 否/);
+  assert.match(html, /<details class="format-group" open="">/);
+  assert.match(html, /<details class="format-group">/);
+  assert.doesNotMatch(html, /字号方式|锁定草稿|同时应用文字页|预览修改/);
+  assert.match(html, /<button class="primary">应用到 1 段/);
 });
 
-test('分页与粗斜体区分不设置和显式关闭，规则不提供相对字号', () => {
-  const font = render(ui.FormatFields, { patch: { bold: false }, tab: 'font', onChange: noop });
-  assert.match(font, /value="false" selected="">关闭/);
-  assert.doesNotMatch(font, /字号方式/);
-  const para = render(ui.FormatFields, { patch: { keep_next: false }, tab: 'paragraph', onChange: noop });
-  assert.match(para, /分页与连排/);
-  assert.match(para, /value="false" selected="">关闭/);
+test('预览更新或错误期间禁用应用，但格式输入仍可用', () => {
+  const props = { draft: { patch: { size_pt: 15 }, sizeChange: null }, onChange: noop, preview: { ids: ['p3'], changes: [] }, ready: false, pending: true, error: null, count: 1, blocks: [paragraph], matched: ['p3'], selectionActive: true, busy: false };
+  const html = render(ui.FormatPanel, props);
+  assert.match(html, /<button class="primary" disabled="">应用到 1 段/);
+  assert.match(html, /正在更新预览/);
+  assert.doesNotMatch(html, /<fieldset disabled/);
+  assert.match(render(ui.FormatPanel, { ...props, pending: false, error: '字号越界' }), /字号越界/);
+});
+
+test('分页与粗斜体区分不设置和显式关闭', () => {
+  const html = render(ui.FormatFields, { patch: { bold: false, keep_next: false }, onChange: noop });
+  assert.match(html, /value="false" selected="">关闭/);
+  assert.match(html, /分页与连排/);
+  assert.doesNotMatch(html, /字号方式|role="tablist"/);
 });
 
 test('失效的章节条件保持可见，绝不静默换成其他章节', () => {
@@ -113,4 +122,19 @@ test('导出检查标明已保存修订、混合字号差异及兼容性边界',
   assert.match(html, /12 磅 \/ 24 磅 → 13 磅 \/ 25 磅/);
   assert.match(html, /不验证精确页数/);
   assert.match(html, /下载此报告/);
+});
+
+
+test('即时预览默认只渲染结果，需要时可切换原文对照', () => {
+  const afterBlock = { ...paragraph, format: { size_pt: 24 }, runs: [{ text: '字号结果', format: { size_pt: 24 } }] };
+  const props = { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: ['p3'], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, marked: [], marking: false, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false, livePreview: true, compare: false };
+  const html = render(ui.DocumentCanvas, props);
+  assert.match(html, /font-size:24pt/);
+  assert.doesNotMatch(html, /font-size:18pt|comparison-before/);
+  assert.match(html, /对照原文/);
+  const comparing = render(ui.DocumentCanvas, { ...props, compare: true });
+  assert.match(comparing, /comparison-before/);
+  assert.match(comparing, /font-size:18pt/);
+  const updating = render(ui.DocumentCanvas, { ...props, previewPending: true });
+  assert.match(updating, /当前仍为上次效果/);
 });

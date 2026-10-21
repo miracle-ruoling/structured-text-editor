@@ -22,7 +22,7 @@ export function ExportInspection({ report, onClose }: { report: ExportReport; on
       <p className="help-text">对实际生成的 Word 文件与原文件进行比较。未提交的草稿和预览不在本次报告中。</p>
       <div className="report-verification"><CheckCheck size={22} /><div><strong>{report.verified ? '文档保留检查通过' : '检查未通过'}</strong><p>原文件不覆盖 · 文字内容保留 · 操作范围外段落保留</p></div></div>
       <div className="report-metrics"><div><strong>{report.changed_paragraphs.length}</strong><span>实际变化段落 / {report.paragraph_count}</span></div><div><strong>{report.changed_parts.length}</strong><span>变化的包内文件</span></div><div><strong>{report.preserved_parts}</strong><span>原样保留的包内文件</span></div></div>
-      <h3>实际修改</h3>
+      <details className="report-standard"><summary>检查以什么为标准？</summary><p>以导入时保存的原 DOCX 和已应用的格式范围为准。允许指定段落的格式变化；文字、对象结构、范围外段落和其他包内文件应保留。检测到非预期变化时停止本次下载，原文件不受影响。</p><p>不以未提交草稿为准，也不检查审美或页数。格式变化导致 Word 重新分页属于正常结果。</p></details><h3>实际修改</h3>
       <p className="help-text">格式操作涉及 {report.planned_paragraph_count} 段；写入显式属性也可能不改变视觉效果。</p>
       {!report.changed_paragraphs.length && <p>没有需要写入的格式变化。</p>}
       <div className="report-changes">{report.changed_paragraphs.slice(0, limit).map(change => <details key={change.id}><summary><b>{change.id.toUpperCase()}</b><span>{change.text.slice(0, 90) || '空段落'}</span></summary><dl>{change.properties.map(property => <div key={property.key}><dt>{formatLabels[property.key] || property.key}</dt><dd>{property.key === 'size_pt' ? sizeValues(change.size_before) : formatValue(property.key, property.before)} → {property.key === 'size_pt' ? sizeValues(change.size_after) : formatValue(property.key, property.after)}</dd></div>)}</dl></details>)}</div>

@@ -30,6 +30,7 @@ from .domain.models import (
     SavedSelector,
     SaveSelectorRequest,
 )
+from .domain.pagination import pagination_warnings
 from .domain.rules import changed_rules, resolve
 from .domain.selectors import select
 from .domain.sizes import changed_sizes, size_values
@@ -209,14 +210,16 @@ class ProjectStore:
         candidate = project.model_copy(update={"annotations": annotations})
         return annotations, before, self.view(candidate), ids
 
-    def preview(self, project: Project, request: FormatRequest) -> dict:
+    def preview(self, project: Project, request: FormatRequest, compact=False) -> dict:
         _, before, after, ids = self.prepare_format(project, request)
         selected = set(ids)
         keys = list(request.patch.values()) + (["size_pt"] if request.size_change else [])
         changes, after_blocks = [], []
         for old, new in zip(before["blocks"], after["blocks"]):
             if old["id"] in selected:
-                after_blocks.append(new)
+                after_blocks.append(
+                    {key: new[key] for key in ("id", "format", "runs", "mixed")} if compact else new
+                )
                 changes.append(
                     {
                         "id": old["id"],
@@ -227,7 +230,13 @@ class ProjectStore:
                         "size_after": size_values(new),
                     }
                 )
-        return {"revision": project.revision, "ids": ids, "changes": changes, "after_blocks": after_blocks}
+        return {
+            "revision": project.revision,
+            "ids": ids,
+            "changes": changes,
+            "after_blocks": after_blocks,
+            "warnings": pagination_warnings(after, selected),
+        }
 
     def apply(self, project: Project, request: FormatRequest):
         annotations, _, _, ids = self.prepare_format(project, request)
@@ -304,6 +313,7 @@ class ProjectStore:
             "changes": changes,
             "after_blocks": after_blocks,
             "rules": after["rules"],
+            "warnings": pagination_warnings(after, {b["id"] for b in after_blocks}),
         }
 
     def change_rule(self, project: Project, request: RuleRequest):
@@ -405,6 +415,7 @@ class ProjectStore:
             "changed_paragraphs": changes,
             "paragraph_count": len(view["blocks"]),
             "warnings": view["warnings"]
+            + pagination_warnings(view, set(annotations))
             + [
                 f"规则「{rule['name']}」{rule['scope_warning']}"
                 for rule in view["rules"]

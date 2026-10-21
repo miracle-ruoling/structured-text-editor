@@ -1,8 +1,6 @@
 import { ArrowDown, ArrowUp, Eye, Layers, Pencil, Plus, Trash2 } from 'lucide-react';
-import { useState } from 'react';
 import type { Chapter, Section, FormatRule, RuleAction, RulePreview, RuleView } from '../lib/types';
 import { formatLabels, formatValue } from '../lib/types';
-import type { FormatTab } from '../lib/workspace';
 import { FormatFields } from './FormatFields';
 import { SelectorSummary } from './SelectorSummary';
 
@@ -14,7 +12,6 @@ type Props = {
 };
 
 export function RulePanel({ rules, draft, preview, canUseScope, busy, chapters, sections, onCreate, onEdit, onChange, onDiscard, onUseScope, onLoadScope, onPreview, onApply, onCancel, onAction }: Props) {
-  const [tab, setTab] = useState<FormatTab>('paragraph');
   const candidate = preview?.rules.find(r => r.id === draft?.id);
   return <fieldset disabled={busy} className="rule-panel">
     <div className="rule-intro"><Layers size={19} /><div><strong>持续格式规则</strong><p>原文档 → 从上到下的规则 → 局部覆盖</p></div></div>
@@ -28,10 +25,10 @@ export function RulePanel({ rules, draft, preview, canUseScope, busy, chapters, 
         <p className="help-text">批量筛选变化不会自动改变本规则。编辑条件后回到此处，点击「采用当前筛选」。</p>
       </section>
       <div className="section-heading"><span>规则格式</span><button className="text-button" onClick={() => onChange({ ...draft, patch: {} })}>清空</button></div>
-      <FormatFields patch={draft.patch} onChange={patch => onChange({ ...draft, patch })} tab={tab} onTab={setTab} />
-      <p className="scope-note">规则保存文字与段落两页的全部设置；留空表示交给下层。</p>
+      <FormatFields patch={draft.patch} onChange={patch => onChange({ ...draft, patch })} />
+      <p className="scope-note">规则保存所有填写的属性，折叠不影响范围。</p>
       <div className="patch-chips" aria-label="规则全部属性">{Object.entries(draft.patch).map(([key, value]) => <span key={key}>{formatLabels[key]} · {formatValue(key, value)}</span>)}</div>
-      {preview && <div className="rule-preview-summary" role="status"><strong>{preview.ids.length} 段的显示格式将改变</strong><p>保存后此规则匹配 {candidate?.matched_count ?? 0} 段，{candidate?.effective_count ?? 0} 段至少有一项属性由它决定。</p>{candidate?.scope_warning && <p className="scope-warning">{candidate.scope_warning}</p>}{!preview.ids.length && <p>当前没有显示变化，仍可保存为持续规则；可在对象属性中查看覆盖关系。</p>}<p>蓝色区域是计算后的完整格式。规则草稿尚未保存。</p></div>}
+      {preview && <div className="rule-preview-summary" role="status"><strong>{preview.ids.length} 段的显示格式将改变</strong><p>保存后此规则匹配 {candidate?.matched_count ?? 0} 段，{candidate?.effective_count ?? 0} 段至少有一项属性由它决定。</p>{candidate?.scope_warning && <p className="scope-warning">{candidate.scope_warning}</p>}{preview.warnings?.map(w => <p className="scope-warning" key={w}>{w}</p>)}{!preview.ids.length && <p>当前没有显示变化，仍可保存为持续规则；可在对象属性中查看覆盖关系。</p>}<p>蓝色区域是计算后的完整格式。规则草稿尚未保存。</p></div>}
       <div className="operation-footer">{preview ? <><button className="primary full" onClick={onApply}>保存规则并应用</button><button className="secondary full" onClick={onCancel}>退出预览 · Esc</button></> : <button className="primary full" disabled={!draft.name.trim() || !Object.keys(draft.patch).length} onClick={onPreview}><Eye size={16} />预览规则效果</button>}</div>
     </> : <>
       <button className="primary full" disabled={!canUseScope || rules.length >= 50} onClick={onCreate}><Plus size={16} />从当前筛选新建规则</button>
