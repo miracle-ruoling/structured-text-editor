@@ -10,8 +10,10 @@ from .rules import resolve
 def freeze_rules(original: dict, project: Project) -> Project:
     states = [project, *project.undo, *project.redo]
     has_rules = any(state.rules for state in states)
-    if not has_rules and project.version == 5:
+    if not has_rules and project.version in (5, 6):
         return project
+    if project.version == 6:
+        raise ValueError("文字编辑项目不能包含持续规则")
     candidate = project.model_copy(deep=True)
     warnings = []
     if has_rules:

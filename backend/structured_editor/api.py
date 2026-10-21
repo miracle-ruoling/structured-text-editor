@@ -20,6 +20,7 @@ from .domain.models import (
     SaveSelectorRequest,
     SelectionAdjustment,
     Selector,
+    TextEditRequest,
 )
 from .domain.point_selection import adjust_selection
 from .domain.selectors import select
@@ -90,6 +91,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     def recent_projects():
         with store.lock:
             return store.recent()
+
+    @app.post("/api/projects/blank")
+    def blank():
+        with store.lock:
+            return store.view(store.create_blank())
+
+    @app.post("/api/projects/{identity}/enable-text")
+    def enable_text(identity: str, operation: RevisionRequest):
+        with store.lock:
+            return store.enable_text(store.upgrade(store.load(identity)), operation.revision)
+
+    @app.post("/api/projects/{identity}/text")
+    def edit_text(identity: str, operation: TextEditRequest):
+        with store.lock:
+            return store.edit_text(store.load(identity), operation)
 
     @app.post("/api/projects/import")
     def import_file(file: UploadFile = File(...)):
@@ -271,6 +287,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.get("/api/projects/{identity}/export/report")
     def export_report(identity: str):
         with store.lock:
+            if store.load(identity).text_editing:
+                raise ValueError("文字编辑已启用，不再执行原文完整性导出检查")
             _, report = store.word_export(store.load(identity))
             return report
 

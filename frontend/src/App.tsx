@@ -20,11 +20,22 @@ import type { SelectionSession } from './lib/selection';
 import { emptyTemplate, templateDraft, templateDirty, extractedEntries } from './lib/templates';
 import type { TemplateDraft, Extraction } from './lib/templates';
 import { useTemplatePreview } from './lib/useTemplatePreview';
+import { caretOffset } from './lib/textEditing';
+import type { TextOperation } from './lib/textEditing';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 
 export default function App() {
   const [doc, setDoc] = useState<DocumentView | null>(null);
+  const docRef = useRef<DocumentView | null>(null);
+  const [textStates, setTextStates] = useState<Record<string, { dirty: boolean; saving: boolean }>>({});
+  const textPending = Object.values(textStates).some(state => state.dirty || state.saving);
+  const textSaving = Object.values(textStates).some(state => state.saving);
+  const textLock = useRef<Promise<unknown>>(Promise.resolve());
+  const [editorFocus, setEditorFocus] = useState<{ id: string; offset: number; choose: boolean; token: number } | null>(null);
+  const onTextState = useCallback((id: string, dirty: boolean, saving: boolean) => {
+    setTextStates(states => { const next = { ...states }; if (dirty || saving) next[id] = { dirty, saving }; else delete next[id]; return next; });
+  }, []);
   const [recent, setRecent] = useState<RecentProject[]>([]);
   const [selectionSession, setSelectionSession] = useState(emptySelectionSession);
   const { selector, active: selectionActive, previous: previousSelector } = selectionSession;
@@ -63,15 +74,15 @@ export default function App() {
   // An empty range input is still an unfinished edit and must be protected from document switches.
   const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!saveName.trim() || !!bulkTagDraft.trim() || !!extraction || rangeDirty || templateDirty(template, library?.items || []);
 
-  const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
+  const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && !textPending && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
   const preview = live.preview;
   const templateScopeReady = selectionActive && !matching && !selectorError && selectorComplete(selector);
   const templateLive = useTemplatePreview(doc, extraction ? null : template?.template || null, templateScope === 'selection' ? selector : null,
-    tab === 'templates' && !busy && templatePreviewEnabled && (templateScope === 'all' || templateScopeReady));
+    tab === 'templates' && !busy && !textPending && templatePreviewEnabled && (templateScope === 'all' || templateScopeReady));
   const clearFormatDraft = useCallback(() => { setFormatDraft(emptyFormatDraft()); }, []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
-    setDoc(value); setReport(null);
+    docRef.current = value; setDoc(value); setReport(null);
     void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
     try { localStorage.setItem(LAST_PROJECT, value.id); } catch { /* Content is stored by the local service. */ }
   }, []);
@@ -104,14 +115,14 @@ export default function App() {
 
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
-      if (hasDraft || busy) { event.preventDefault(); event.returnValue = ''; }
+      if (hasDraft || busy || textPending) { event.preventDefault(); event.returnValue = ''; }
     };
     window.addEventListener('beforeunload', beforeUnload);
     return () => window.removeEventListener('beforeunload', beforeUnload);
-  }, [hasDraft, busy]);
+  }, [hasDraft, busy, textPending]);
 
   const run = useCallback(async (action: () => Promise<void>): Promise<boolean> => {
-    if (operationLock.current) return false;
+    if (operationLock.current || textPending) { if (textPending) setMessage({ text: '文字正在保存或保存失败，请完成保存后再操作。', error: true }); return false; }
     operationLock.current = true; setBusy(true); setMessage(null);
     try { await action(); return true; }
     catch (error) {
@@ -121,7 +132,7 @@ export default function App() {
       }
       return false;
     } finally { operationLock.current = false; setBusy(false); }
-  }, [doc, acceptDoc]);
+  }, [doc, acceptDoc, textPending]);
 
   const history = useCallback((direction: 'undo' | 'redo') => {
     if (!doc || busy || !(direction === 'undo' ? doc.undo_label : doc.redo_label)) return;
@@ -149,6 +160,7 @@ export default function App() {
   }, [history, patch, sizeChange, tab, templatePreviewEnabled, busy, pendingSwitch, report, clearFormatDraft]);
 
   function changeSelector(value: Selector, explicitAll = false) {
+    if (textPending) return;
     setRangeError(null);
     const retained = new Set(value.conditions.map((condition, index) => condition.key || String(index)));
     setRangeInputs(current => Object.fromEntries(Object.entries(current).filter(([key]) => retained.has(key))));
@@ -179,6 +191,7 @@ export default function App() {
     setOnlyMatches(false); setRangeInputs({}); setRangeError(null);
   }
   function newDocument(document: DocumentView) {
+    setEditorFocus(null); setTextStates({});
     acceptDoc(document); setCurrent(null); clearFormatDraft(); setCompare(false); setTab('batch'); setOnlyMatches(false);
     setSelectionSession(emptySelectionSession());
     setRangeInputs({}); setRangeError(null);
@@ -187,7 +200,7 @@ export default function App() {
     setBulkAction('add_tag'); setBulkRole('body');
   }
   function guardSwitch(action: () => void) {
-    if (busy) return;
+    if (busy || textPending) return;
     if (hasDraft) setPendingSwitch({ action });
     else action();
   }
@@ -197,7 +210,7 @@ export default function App() {
     setCurrent(id); changePanel('object');
   }
   function pickParagraph(id: string, toggle = false) {
-    if (busy || !doc) return;
+    if (busy || textPending || !doc) return;
     const block = doc.blocks.find(item => item.id === id);
     if (!block) return;
     const action = () => {
@@ -339,19 +352,59 @@ export default function App() {
     });
   }
 
+  const editText = useCallback(async (operation: TextOperation) => {
+    const queued = textLock.current.then(async () => {
+      const currentDoc = docRef.current;
+      if (!currentDoc || operationLock.current) return null;
+      try {
+        const index = currentDoc.blocks.findIndex(b => b.id === operation.id);
+        const previous = currentDoc.blocks[index - 1];
+        const offset = operation.action === 'join' ? [...(previous?.text || '')].length : 0;
+        const value = await api.editText(currentDoc, operation);
+        acceptDoc(value);
+        if (operation.action !== 'replace') {
+          setEditorFocus({ id: value.edit_focus || operation.id, offset, choose: operation.action === 'split', token: Date.now() });
+        }
+        const block = value.blocks.find(b => b.id === (value.edit_focus || operation.id));
+        return { id: block?.id || operation.id, text: block?.text || '' };
+      } catch (error) { setMessage({ text: (error as Error).message, error: true }); return null; }
+    });
+    textLock.current = queued;
+    return queued;
+  }, [acceptDoc]);
+
+  const editorHistory = useCallback(async (direction: 'undo' | 'redo') => {
+    await textLock.current;
+    const currentDoc = docRef.current;
+    if (!currentDoc || operationLock.current) return;
+    const active = document.activeElement as HTMLElement | null;
+    const identity = active?.getAttribute('aria-label')?.match(/^(P[0-9]+) 文字编辑$/)?.[1].toLowerCase();
+    const offset = active && identity ? caretOffset(active) : 0;
+    operationLock.current = true; setBusy(true);
+    try {
+      const value = await api.history(currentDoc, direction); acceptDoc(value);
+      const focus = value.blocks.find(b => b.id === identity) || value.blocks.find(b => b.text_editable);
+      if (focus) setEditorFocus({ id: focus.id, offset, choose: false, token: Date.now() });
+    }
+    catch (error) { setMessage({ text: (error as Error).message, error: true }); }
+    finally { operationLock.current = false; setBusy(false); }
+  }, [acceptDoc]);
+
   const allTags = useMemo(() => [...new Set(doc?.blocks.flatMap(b => b.tags) || [])], [doc]);
   const currentBlock = doc?.blocks.find(b => b.id === current) || null;
   return <div className="app-shell">
     <header className="app-header">
       <div className="brand"><div className="brand-mark"><span /><span /><span /></div><strong>文序</strong><span className="brand-caption">结构化文档工作台</span></div>
       <div className="header-actions">
-        <a className="secondary native-entry" href="/?mode=native" target="_blank" rel="noopener noreferrer" title="在新页面打开原生写作">原生写作 ↗</a>
-        <span className="save-status">{busy ? <><LoaderCircle size={13} className="spin" />处理中</> : <><CheckCheck size={14} />{hasDraft ? '已保存 · 有未提交草稿' : '已保存到本机'}</>}</span>
-        <input ref={inputRef} type="file" hidden accept=".docx,.sdoc" onChange={e => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
-        <button className="secondary" disabled={busy} onClick={() => inputRef.current?.click()}><FileInput size={15} />导入文件</button>
-        <button className="secondary project-save" disabled={busy || !doc} title="下载已保存状态的便携副本，本机项目自动保存" onClick={() => download('project')}><FolderDown size={15} />导出项目包</button>
-        <button className="secondary" disabled={busy || !doc} onClick={inspectExport}>导出检查</button>
-        <button className="primary" disabled={busy || !doc} onClick={() => download('docx')}><Download size={15} />导出 Word</button>
+        <button className="secondary" disabled={busy || textPending} onClick={() => guardSwitch(() => void run(async () => newDocument(await api.blank())))}>新建文档</button>
+        {doc && !doc.text_editing && <button className="secondary" disabled={busy || textPending} onClick={() => void run(async () => acceptDoc(await api.enableText(doc)))}>启用文字编辑</button>}
+        {doc?.text_editing && <span className="editing-mode">文字编辑已启用</span>}
+        <span className="save-status">{busy ? <><LoaderCircle size={13} className="spin" />处理中</> : <><CheckCheck size={14} />{textPending ? (textSaving ? '正在保存文字' : '文字尚未保存') : hasDraft ? '已保存 · 有未提交草稿' : '已保存到本机'}</>}</span>
+        <input ref={inputRef} type="file" hidden accept=".docx,.sdoc,.json" onChange={e => { importFile(e.target.files?.[0]); e.target.value = ''; }} />
+        <button className="secondary" disabled={busy || textPending} onClick={() => inputRef.current?.click()}><FileInput size={15} />导入文件</button>
+        <button className="secondary project-save" disabled={busy || !doc || textPending} title="下载已保存状态的便携副本，本机项目自动保存" onClick={() => download('project')}><FolderDown size={15} />导出项目包</button>
+        {!doc?.text_editing && <button className="secondary" disabled={busy || !doc || textPending} onClick={inspectExport}>导出检查</button>}
+        <button className="primary" disabled={busy || !doc || textPending} onClick={() => download('docx')}><Download size={15} />导出 Word</button>
       </div>
     </header>
     {doc ? <div className="workspace">
@@ -359,18 +412,18 @@ export default function App() {
         onOpen={id => guardSwitch(() => void run(async () => newDocument(await api.get(id))))}
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
         onDeleteSelector={deleteSavedSelector}
-        onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
-      <DocumentCanvas doc={doc} matched={tab === 'templates' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
+        onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy || textPending} />
+      <DocumentCanvas preventHide={textPending} key={doc.id} textEditor={{ onEdit: editText, onTextState, editorFocus, onHistory: editorHistory }} doc={doc} matched={tab === 'templates' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
         onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true)} onFormat={formatObject} preview={tab === 'templates' ? templateLive.preview : preview} patch={{}} livePreview={true} previewPending={tab === 'templates' ? templateLive.pending : live.pending} previewError={tab === 'templates' ? templateLive.error : live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (tab === 'templates') setTemplatePreviewEnabled(false); else clearFormatDraft(); }}
         showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'templates' && onlyMatches}
-        onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'templates' && selectionActive} />
+        onOnlyMatches={() => { if (!textPending) setOnlyMatches(!onlyMatches); }} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'templates' && selectionActive} />
       <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
           <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />操作</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => changePanel('object')}><Fingerprint size={15} />对象属性</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'templates'} className={tab === 'templates' ? 'active' : ''} onClick={() => changePanel('templates')}><Layers size={15} />模板</button>
         </div>
-        <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
+        <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy || textPending}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
             rangeInputs={rangeInputs} onRangeDraft={updateRangeDraft} onRangeCommit={commitRange}
             error={selectorError} direct={selectionSession.direct} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
@@ -383,7 +436,7 @@ export default function App() {
             busy={busy} count={matched.length} ready={live.ready} pending={live.pending} error={live.error}
             selectionActive={selectionActive} blocks={doc.blocks} matched={matched}
             onRetry={() => { if (live.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else live.retry(); }} />
-        </fieldset> : tab === 'templates' ? <TemplatePanel doc={doc} library={library} draft={template} extraction={extraction} busy={busy}
+        </fieldset> : tab === 'templates' ? <TemplatePanel doc={doc} library={library} draft={template} extraction={extraction} busy={busy || textPending}
           dirty={templateDirty(template, library?.items || [])} preview={templateLive.preview} ready={templateLive.ready} pending={templateLive.pending} error={templateLive.error}
           scope={templateScope} scopeReady={templateScopeReady} scopeCount={matched.length} onScope={value => { setTemplateScope(value); setTemplatePreviewEnabled(true); }}
           previewEnabled={templatePreviewEnabled} onPreviewToggle={() => setTemplatePreviewEnabled(value => !value)}
@@ -391,12 +444,12 @@ export default function App() {
           onRetry={() => { if (templateLive.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else templateLive.retry(); }}
           onChange={value => { setTemplate(value); setTemplatePreviewEnabled(true); }} onExtract={extractTemplate} onExtraction={setExtraction} onAdopt={adoptExtraction}
           onSave={saveTemplate} onDelete={deleteTemplate} onImport={importTemplate} onApply={applyTemplate}
-        /> : <ObjectInspector block={currentBlock} busy={busy} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
+        /> : <ObjectInspector block={currentBlock} busy={busy || textPending} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">
       <div><span className="status-dot" /><span>本地运行</span><span className="status-divider" />{doc && <><span>{doc.blocks.length} 个段落</span><span className="status-divider" /><span>{!selectionActive ? '未筛选' : matching ? '正在匹配…' : `筛选匹配 ${matched.length} 段`}</span>{selectionActive && <button disabled={busy} onClick={exitSelection}>退出筛选</button>}</>}</div>
-      <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>即时格式预览</span></div>
+      <div className="history-controls"><button disabled={busy || textPending || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || textPending || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>即时格式预览</span></div>
     </footer>
     {pendingSwitch && <DraftDialog message={pendingSwitch.message} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
     {report && <ExportInspection report={report} onClose={() => setReport(null)} />}

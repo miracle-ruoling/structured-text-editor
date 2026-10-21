@@ -23,6 +23,9 @@ export async function request<T>(path: string, body?: unknown, form?: FormData, 
 }
 
 export const api = {
+  blank: () => request<DocumentView>('/projects/blank', {}),
+  enableText: (doc: DocumentView) => request<DocumentView>(`/projects/${doc.id}/enable-text`, { revision: doc.revision }),
+  editText: (doc: DocumentView, operation: import('./textEditing').TextOperation) => request<DocumentView>(`/projects/${doc.id}/text`, { revision: doc.revision, ...operation }),
   templates: () => request<TemplateLibrary>('/templates'),
   saveTemplate: (revision: number, template: FormatTemplate, id?: string) => request<TemplateLibrary>('/templates/save', { revision, template, id }),
   deleteTemplate: (revision: number, id: string, restore = false) => request<TemplateLibrary>(`/templates/${restore ? 'restore' : 'delete'}`, { revision, id }),

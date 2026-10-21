@@ -522,3 +522,16 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .document-block.focused.focus-muted:not(.matched):not(.pending)::after { content: '仅查看'; color: #737d7e; background: #f2f4f4; }
 
 .native-entry { display: inline-flex; align-items: center; text-decoration: none; color: inherit; border: 1px solid var(--line); }
+
+/* Writing is part of the same document canvas. */
+.editable-text { outline: none; min-height: 1.6em; cursor: text; }
+.editable-text:focus { box-shadow: inset 2px 0 #26776945; }
+.inline-writing { min-width: 0; }
+.paragraph-chooser { display: flex; gap: 5px; flex-wrap: wrap; padding: 9px; margin: 6px 0 10px; border: 1px solid #cbded6; border-radius: 8px; background: #f7faf8; font: 12px 'Microsoft YaHei', sans-serif; }
+.paragraph-chooser button { border: 1px solid transparent; border-radius: 5px; padding: 5px 7px; }
+.paragraph-chooser button.selected { border-color: var(--green); background: #e1f1e9; color: var(--green-dark); box-shadow: 0 0 0 1px #26776925; }
+.inline-edit-error { color: #a53325; font: 12px/1.5 'Microsoft YaHei', sans-serif; }
+.inline-edit-error button { text-decoration: underline; }
+.editing-mode { color: var(--green); font-size: 12px; white-space: nowrap; }
+.app-header .save-status { display: inline-flex; }
+@media (max-width: 1400px) { .app-header { height: auto; min-height: 70px; flex-basis: auto; flex-wrap: wrap; padding-top: 10px; padding-bottom: 10px; gap: 10px; } .header-actions { flex-wrap: wrap; } }

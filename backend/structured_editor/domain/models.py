@@ -202,11 +202,47 @@ class FormatRule(SavedSelector):
         return self
 
 
+class EditableDocument(Model):
+    xml: str = Field(max_length=20000000)
+    ids: list[str] = Field(max_length=20000)
+
+    @field_validator("ids")
+    @classmethod
+    def valid_ids(cls, values):
+        if len(set(values)) != len(values) or any(not re.fullmatch(r"p[1-9][0-9]*", v) for v in values):
+            raise ValueError("正文段落 ID 无效或重复")
+        return values
+
+
+class TextEditRequest(Model):
+    revision: int
+    action: Literal["replace", "split", "join", "delete", "category"]
+    id: str = Field(pattern=r"^p[1-9][0-9]*$")
+    text: str | None = Field(default=None, max_length=100000)
+    offset: int | None = Field(default=None, ge=0)
+    role: Role = "body"
+    level: int | None = Field(default=None, ge=1, le=3)
+
+    @model_validator(mode="after")
+    def valid_edit(self):
+        if self.action == "replace" and self.text is None:
+            raise ValueError("缺少正文")
+        if self.action == "split" and self.offset is None:
+            raise ValueError("缺少拆分位置")
+        if (self.role == "heading") != (self.level is not None):
+            raise ValueError("小标题需指定级别，其他类别不能设置小标题级别")
+        if self.text is not None and any(not (c in "\n\t" or 0x20 <= ord(c) <= 0xD7FF
+                or 0xE000 <= ord(c) <= 0xFFFD or 0x10000 <= ord(c) <= 0x10FFFF) for c in self.text):
+            raise ValueError("正文包含不支持的控制字符")
+        return self
+
+
 class Snapshot(Model):
     label: str
     annotations: dict[str, Annotation]
     saved_selectors: list[SavedSelector] = Field(default_factory=list, max_length=50)
     rules: list[FormatRule] = Field(default_factory=list, max_length=50)
+    content: EditableDocument | None = None
 
 
 class LegacyRuleArchive(Model):
@@ -218,7 +254,7 @@ class LegacyRuleArchive(Model):
 
 
 class Project(Model):
-    version: Literal[4, 5] = 5
+    version: Literal[4, 5, 6] = 5
     id: str
     name: str
     source_sha256: str
@@ -230,6 +266,10 @@ class Project(Model):
     redo: list[Snapshot] = Field(default_factory=list, max_length=50)
     updated_at: str = ""
     legacy_rule_archive: LegacyRuleArchive | None = None
+    text_editing: bool = False
+    content: EditableDocument | None = None
+    next_paragraph: int = Field(default=1, ge=1)
+    native_origin: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -241,6 +281,10 @@ class Project(Model):
 
     @model_validator(mode="after")
     def unique_selections(self):
+        if self.version != 6 and (self.text_editing or self.content is not None):
+            raise ValueError("文字编辑项目需要 version=6")
+        if not self.text_editing and self.content is not None:
+            raise ValueError("正文快照需要启用文字编辑")
         for items in [self.saved_selectors, *[s.saved_selectors for s in self.undo + self.redo]]:
             if len({s.id for s in items}) != len(items) or len({s.name.casefold() for s in items}) != len(
                 items

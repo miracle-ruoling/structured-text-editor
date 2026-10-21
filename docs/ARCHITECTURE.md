@@ -285,3 +285,16 @@ HTTP 入口：`/api/templates` 列表，`/save`、`/delete`、`/restore`、`/imp
 - /api/native 的创建、列表、导入、读取、save、history/undo|redo、export/docx|project 与旧 /api/projects 分离。导出必须携带当前 revision。原生备份扩展名 .wnative.json，与 .sdoc 入口分开。最近列表最多 30 项。
 - docx/native.py 创建新 OOXML 包，正文 12pt（24 半磅），一级/二级/三级标题 18/15/13pt，明确继承 Normal 并设置 outlineLvl 0/1/2、keepNext；A4 页尺寸和页边距用 twip。特殊字符由 lxml 转义，制表符/换行分别生成 tab/br。不读取或覆盖任何用户源包。
 - 原生编辑器独立页面并懒加载，原 DOCX 工作台草稿不被卸载。3B 再接入类别、标签、筛选、模板与同一内容历史；3C 增加资源/复杂节点；3D 增加有降级报告的转换。此处列出的后续能力尚未实现。
+
+
+## 19. 3B：统一工作台与内容快照（现行）
+
+- 不再进入独立 NativeWorkspace；main 始终加载 App。DocumentCanvas 以 text_editing/text_editable 切换逐段 EditableParagraph，保留原画布结构、类别标记、筛选、格式与模板。点击正文不会隐式更改批量范围；点击标记或编号仍选择范围。
+- Project v6 增加 text_editing、content(XML+ids)、next_paragraph、native_origin；Snapshot 增加 content，格式/标注/模板和正文共用 50 次历史。编辑授权作为项目模式持久保存，不随撤销关闭。旧历史 content=null 时回到源 XML，模式继续可编辑。next_paragraph 不随历史倒退，防止复用已删除节点 ID。
+- docx/editing.py 负责源包+快照重建、稳定 ID 映射、纯文字范围替换、拆分合并、类别结构格式及导出；HTTP/界面不拼 XML。仅纯文字 runs 可编辑；复杂段落保留。替换按公共前后缀保留未修改 run 格式；逐 run 字号覆盖在重新分段前烘焙，范围外 XML/ZIP 部件不变。
+- 新段落类别动作设置语义 role，并明确设置标题层级与默认格式。正文 12pt；文档标题 24pt 居中；三级小标题 18/15/13pt 加粗且 keepNext。大标题与非标题 outlineLvl=9，小标题 0/1/2；清除冲突的旧 pStyle/numPr/rPr/jc。格式模板可随后覆盖；普通标注仍不暗改格式。
+- /api/projects/blank、/{id}/enable-text、/{id}/text 新增；text 接受 replace/split/join/delete/category 与 revision。Unicode 拆分偏移按码点，前端从光标 UTF-16 位置换算。稳定 pN 保留现有选择器接口，编号不等于当前序号。
+- 前端文字请求串行依次使用最新 revision；约 650ms 停顿保存，响应不覆盖继续输入。其他文档操作在文字未保存时禁用，失败显示重试/下载本地文字。菜单为正文旁普通按钮组，mousedown 不转焦点；数字/左右/Enter 处理在正文上，composing 期间不捕获。Ctrl+Z/Shift+Z 使用服务端历史并恢复焦点。
+- 编辑模式 Word 导出用快照重建当前 document.xml，按稳定 ID 映射格式覆盖；跳过 source-vs-output 文字保留审计。未启用模式继续原检查。项目导出统一 .sdoc，带源包与 v6 历史，导入逐历史校验 annotation/run 定位与 ID，分配器推进到所有历史最大 ID 之后。
+- data/native 旧文档首次列项目时迁入统一项目，使用 native_origin 防止重复，保留旧文件；.wnative.json 可从统一导入入口导入。迁移保留正文节点映射及内容历史，不映射旧名称撤销。旧 /api/native 仅兼容，不作为当前界面入口。
+- 当前编辑是逐段文本，不是复杂 Word 全量编辑；复杂段落只读、粘贴纯文本且段内换行、跨段选区未实现。旧 3A Markdown 标题输入暂由类别容器替代。真实 IME 与长文档性能未实际验收。

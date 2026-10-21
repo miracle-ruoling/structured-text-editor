@@ -16,6 +16,7 @@ export type SizeChange = { mode: 'points' | 'chinese_steps'; amount: number };
 export type Chapter = { id: string; name: string; level: number; count: number };
 export type Section = { id: string; name: string; count: number; break_type: string; width_pt: number | null; height_pt: number | null };
 export type Block = {
+  text_editable?: boolean;
   id: string; kind: 'paragraph'; text: string; role: Role; tags: string[]; in_table: boolean;
   editable: boolean; confirmed: boolean; style_id: string; style_name: string; role_source: string;
   format: Format; format_sources: Record<string, string>; mixed: string[]; features: string[];
@@ -26,6 +27,7 @@ export type Block = {
 };
 export type Layout = { kind: 'paragraph'; id: string } | { kind: 'table'; rows: { span: number; children: Layout[] }[][] } | { kind: 'unsupported'; label: string; children: Layout[] };
 export type DocumentView = {
+  text_editing?: boolean; edit_focus?: string;
   id: string; name: string; revision: number; updated_at: string;
   blocks: Block[]; layout: Layout[]; warnings: string[]; undo_label: string | null; redo_label: string | null;
   saved_selectors: SavedSelector[];

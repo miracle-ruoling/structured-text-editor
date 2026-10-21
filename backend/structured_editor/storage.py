@@ -12,6 +12,7 @@ from pathlib import Path
 from threading import RLock
 
 from .docx.audit import audit_export
+from .docx.editing import edit_document, editable_view, enable_editing, export_edited, package_for
 from .docx.package import DocxPackage, open_zip
 from .docx.reader import project_document
 from .docx.sample import PROTECTED_TEXT, create_sample
@@ -76,6 +77,17 @@ class ProjectStore:
         return upgraded
 
     def recent(self) -> list[dict]:
+        from .native_store import NativeStore
+        native_store = NativeStore(self.root)
+        origins = {p.native_origin for p in self.existing_projects() if p.native_origin}
+        for path in native_store.root.glob('*.json'):
+            if path.stem in origins:
+                continue
+            try:
+                native = native_store.load(path.stem)
+            except (ValueError, OSError):
+                continue
+            self.import_native(native)
         projects = []
         for folder in self.root.iterdir():
             if not folder.is_dir() or not re.fullmatch(r"[0-9a-f]{32}", folder.name):
@@ -128,18 +140,24 @@ class ProjectStore:
         else:
             if project.source_sha256 != checksum:
                 raise ValueError("项目中的原文件校验失败。")
-            permitted = {b["id"] for b in base["blocks"] if b["editable"]}
-            run_ids = {b["id"]: {str(r["index"]) for r in b["runs"]} for b in base["blocks"]}
-            for annotations in [project.annotations, *[s.annotations for s in project.undo + project.redo]]:
-                if not annotations.keys() <= permitted:
+            for state in [project, *project.undo, *project.redo]:
+                state_base = project_document(package_for(source, state.content))
+                permitted = {b["id"] for b in state_base["blocks"] if b["editable"]}
+                run_ids = {b["id"]: {str(r["index"]) for r in b["runs"]} for b in state_base["blocks"]}
+                if not state.annotations.keys() <= permitted:
                     raise ValueError("项目包含无效或不支持修改的段落。")
-                for paragraph_id, annotation in annotations.items():
+                for paragraph_id, annotation in state.annotations.items():
                     if annotation.sizes and not annotation.sizes.runs.keys() <= run_ids[paragraph_id]:
                         raise ValueError("项目包含无效的逐文字字号定位。")
+            if project.version == 6:
+                all_ids = [int(i[1:]) for state in [project, *project.undo, *project.redo]
+                           for i in package_for(source, state.content).by_id]
+                project.next_paragraph = max(project.next_paragraph, max(all_ids, default=0) + 1)
             project.id = identity
             project.name = self.unique_name(project.name)
         # Finish migration before creating files, so a failed import leaves no partial project.
         project = freeze_rules(base, project)
+        # A reopened source-only DOCX must not silently enter an existing editable copy.
         touch(project)
         folder = self.folder(identity)
         folder.mkdir()
@@ -147,8 +165,34 @@ class ProjectStore:
         self.save(project)
         return project
 
+    def import_native(self, native):
+        from .docx.editing import snapshot
+        from .docx.native import export_native
+        from .domain.models import Snapshot
+        states = [native.content, *native.undo, *native.redo]
+        ids = {}
+        for state in states:
+            for block in state.blocks:
+                ids.setdefault(block.id, f'p{len(ids) + 1}')
+        def convert(state):
+            package = DocxPackage(export_native(state))
+            package.ids = {p: ids[b.id] for p, b in zip(package.paragraphs, state.blocks, strict=True)}
+            return snapshot(package), {ids[b.id]: Annotation(role='heading' if b.kind == 'heading' else 'body') for b in state.blocks}
+        source = export_native(native.content)
+        content, annotations = convert(native.content)
+        def history(states):
+            return [Snapshot(label='原生文字编辑', content=convert(s)[0], annotations=convert(s)[1]) for s in states]
+        project = Project(version=6, id=uuid.uuid4().hex, name=native.content.name + '.docx',
+                          source_sha256=hashlib.sha256(source).hexdigest(), text_editing=True,
+                          content=content, annotations=annotations, next_paragraph=len(ids) + 1,
+                          undo=history(native.undo), redo=history(native.redo), native_origin=native.id)
+        return self.create(source, project.name, project)
+
     def import_file(self, data: bytes, name: str) -> Project:
         name = Path(name.replace("\\", "/")).name[:180]
+        if name.lower().endswith('.json'):
+            from .domain.native import NativeProject
+            return self.import_native(NativeProject.model_validate_json(data))
         if name.lower().endswith(".sdoc"):
             with open_zip(data) as archive:
                 if "project.json" not in archive.namelist() or "source.docx" not in archive.namelist():
@@ -166,6 +210,9 @@ class ProjectStore:
                     candidate = freeze_rules(base, existing)
                     if (
                         candidate.annotations == project.annotations
+                        and candidate.content == project.content
+                        and candidate.text_editing == project.text_editing
+                        and candidate.next_paragraph == project.next_paragraph
                         and candidate.saved_selectors == project.saved_selectors
                         and candidate.rules == project.rules
                         and candidate.legacy_rule_archive == project.legacy_rule_archive
@@ -179,7 +226,7 @@ class ProjectStore:
         if not name.lower().endswith(".docx"):
             raise ValueError("请选择 .docx 文件或 .sdoc 文序项目。")
         checksum = hashlib.sha256(data).hexdigest()
-        matches = [p for p in self.existing_projects() if p.source_sha256 == checksum]
+        matches = [p for p in self.existing_projects() if p.source_sha256 == checksum and not p.text_editing]
         if matches:
             return max(matches, key=lambda p: p.updated_at)
         return self.create(data, name)
@@ -195,10 +242,11 @@ class ProjectStore:
         return project
 
     def view(self, project: Project) -> dict:
-        view = resolve(self.original_view(project.id), project)
+        view = resolve(self.base_view(project), project)
         return {
             **view,
             "id": project.id,
+            "text_editing": project.text_editing,
             "name": project.name,
             "revision": project.revision,
             "updated_at": project.updated_at,
@@ -208,6 +256,30 @@ class ProjectStore:
             "legacy_migration": ({"archived": True, "warnings": project.legacy_rule_archive.warnings}
                                  if project.legacy_rule_archive else None),
         }
+
+    def base_view(self, project):
+        return editable_view(self.source(project.id), project) if project.text_editing else self.original_view(project.id)
+
+    def enable_text(self, project, revision):
+        check_revision(project, revision)
+        if enable_editing(self.source(project.id), project):
+            self.save(project)
+        return self.view(project)
+
+    def edit_text(self, project, operation):
+        focus = edit_document(self.source(project.id), project, operation)
+        self.save(project)
+        return {**self.view(project), "edit_focus": focus}
+
+    def create_blank(self):
+        from .docx.native import export_native
+        from .domain.native import new_native
+        native = new_native()
+        project = self.create(export_native(native.content), self.unique_name('未命名文档.docx'))
+        enable_editing(self.source(project.id), project)
+        project.annotations['p1'] = Annotation(role='body')
+        self.save(project)
+        return project
 
     def prepare_template(self, project: Project, request: TemplateRequest):
         check_revision(project, request.revision)
@@ -293,7 +365,7 @@ class ProjectStore:
 
     def annotate(self, project: Project, request: AnnotationRequest):
         check_revision(project, request.revision)
-        editable = {b["id"] for b in self.original_view(project.id)["blocks"] if b["editable"]}
+        editable = {b["id"] for b in self.base_view(project)["blocks"] if b["editable"]}
         if not set(request.ids) <= editable:
             raise ValueError("选择中包含不支持修改的段落。")
         annotations = deepcopy(project.annotations)
@@ -371,7 +443,7 @@ class ProjectStore:
 
     def clear_overrides(self, project: Project, request: ClearOverridesRequest):
         check_revision(project, request.revision)
-        editable = {b["id"] for b in self.original_view(project.id)["blocks"] if b["editable"]}
+        editable = {b["id"] for b in self.base_view(project)["blocks"] if b["editable"]}
         if not set(request.ids) <= editable:
             raise ValueError("选择中包含不支持修改的段落。")
         annotations = deepcopy(project.annotations)
@@ -429,6 +501,8 @@ class ProjectStore:
         view = self.view(project)
         annotations = self.export_annotations(project, view)
         source = self.source(project.id)
+        if project.text_editing:
+            return export_edited(source, project.content, annotations), {"editing": True, "revision": project.revision}
         output = export_docx(source, annotations)
         audit = audit_export(source, output, set(annotations))
         original = {b["id"]: b for b in self.original_view(project.id)["blocks"]}

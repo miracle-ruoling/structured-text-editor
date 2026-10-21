@@ -34,6 +34,7 @@ def commit(project: Project, annotations: dict, label: str, saved_selectors=None
             annotations=deepcopy(project.annotations),
             saved_selectors=deepcopy(project.saved_selectors),
             rules=deepcopy(project.rules),
+            content=deepcopy(project.content),
         ),
     ]
     project.redo = []
@@ -56,6 +57,7 @@ def travel(project: Project, direction: str):
             annotations=deepcopy(project.annotations),
             saved_selectors=deepcopy(project.saved_selectors),
             rules=deepcopy(project.rules),
+            content=deepcopy(project.content),
         )
     )
     if len(destination) > 50:
@@ -63,4 +65,5 @@ def travel(project: Project, direction: str):
     project.annotations = deepcopy(snapshot.annotations)
     project.saved_selectors = deepcopy(snapshot.saved_selectors)
     project.rules = deepcopy(snapshot.rules)
+    project.content = deepcopy(snapshot.content)
     touch(project)
