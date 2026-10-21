@@ -10,7 +10,7 @@ import { ObjectInspector } from './components/ObjectInspector';
 import { SelectorBuilder } from './components/SelectorBuilder';
 import { Sidebar } from './components/Sidebar';
 import { api, ApiError } from './lib/api';
-import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, RecentProject, Role, Selector, TemplateLibrary, StoredTemplate } from './lib/types';
+import type { BulkAnnotation, DocumentView, ExportReport, RecentProject, Role, Selector, TemplateLibrary, StoredTemplate } from './lib/types';
 import { selectorComplete } from './lib/workspace';
 import { emptyFormatDraft } from './lib/formatDraft';
 import { useFormatPreview } from './lib/useFormatPreview';
@@ -42,14 +42,13 @@ export default function App() {
   const [bulkAction, setBulkAction] = useState<BulkAnnotation['action']>('add_tag');
   const [bulkRole, setBulkRole] = useState<Role>('body');
   const [current, setCurrent] = useState<string | null>(null);
-  const [tagDraft, setTagDraft] = useState('');
   const [tab, setTab] = useState<'batch' | 'object' | 'templates'>('batch');
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [showTags, setShowTags] = useState(true);
   const [onlyMatches, setOnlyMatches] = useState(false);
   const [zoom, setZoom] = useState(100);
-  const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; objectOnly: boolean; message?: string } | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<{ action: () => void; message?: string } | null>(null);
   const [rangeInputs, setRangeInputs] = useState<Record<string, string>>({});
   const [rangeError, setRangeError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -62,7 +61,7 @@ export default function App() {
   const { ids: matched, matching, error: selectionError } = selection;
   const selectorError = rangeError || (rangeDirty ? '段落编号尚未确认，请按回车或移开焦点完成。' : selectionError);
   // An empty range input is still an unfinished edit and must be protected from document switches.
-  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!tagDraft.trim() || !!saveName.trim() || !!bulkTagDraft.trim() || !!extraction || rangeDirty || templateDirty(template, library?.items || []);
+  const hasDraft = !!Object.keys(patch).length || !!sizeChange || !!saveName.trim() || !!bulkTagDraft.trim() || !!extraction || rangeDirty || templateDirty(template, library?.items || []);
 
   const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
   const preview = live.preview;
@@ -180,29 +179,29 @@ export default function App() {
     setOnlyMatches(false); setRangeInputs({}); setRangeError(null);
   }
   function newDocument(document: DocumentView) {
-    acceptDoc(document); setCurrent(null); setTagDraft(''); clearFormatDraft(); setCompare(false); setTab('batch'); setOnlyMatches(false);
+    acceptDoc(document); setCurrent(null); clearFormatDraft(); setCompare(false); setTab('batch'); setOnlyMatches(false);
     setSelectionSession(emptySelectionSession());
     setRangeInputs({}); setRangeError(null);
     setSaveName('');
     setTemplate(null); setExtraction(null); setTemplateScope('all'); setTemplatePreviewEnabled(true); setBulkTagDraft('');
     setBulkAction('add_tag'); setBulkRole('body');
   }
-  function guardSwitch(action: () => void, objectOnly = false) {
+  function guardSwitch(action: () => void) {
     if (busy) return;
-    if (objectOnly ? !!tagDraft.trim() : hasDraft) setPendingSwitch({ action, objectOnly });
+    if (hasDraft) setPendingSwitch({ action });
     else action();
   }
   function pickObject(id: string) {
     if (busy) return;
     if (id === current) { changePanel('object'); return; }
-    guardSwitch(() => { setCurrent(id); setTagDraft(''); changePanel('object'); }, true);
+    setCurrent(id); changePanel('object');
   }
   function pickParagraph(id: string, toggle = false) {
     if (busy || !doc) return;
     const block = doc.blocks.find(item => item.id === id);
     if (!block) return;
     const action = () => {
-      setCurrent(id); if (id !== current) setTagDraft('');
+      setCurrent(id);
       if (!block.editable) {
         if (!selectionActive) changePanel('object');
         return;
@@ -219,7 +218,7 @@ export default function App() {
         acceptSelection(pointIntent(base, id, !matched.includes(id)));
       } else acceptSelection(selectParagraph(selectionSession, id, toggle));
     };
-    if (id === current) action(); else guardSwitch(action, true);
+    action();
   }
   function importFile(file?: File) {
     if (file) guardSwitch(() => void run(async () => {
@@ -240,13 +239,6 @@ export default function App() {
       setReport(result);
     });
   }
-  function annotate(id: string, annotation: AnnotationPatch): Promise<boolean> {
-    if (!doc) return Promise.resolve(false);
-    return run(async () => {
-      acceptDoc(await api.annotate(doc, id, annotation));
-      setMessage({ text: '标注已自动保存，可撤销', error: false });
-    });
-  }
   function changePanel(value: typeof tab) {
     if (busy) return;
     setTab(value);
@@ -254,14 +246,14 @@ export default function App() {
   function formatObject(id: string) {
     if (busy || !doc?.blocks.some(block => block.id === id && block.editable)) return;
     const action = () => {
-      setCurrent(id); if (id !== current) setTagDraft('');
+      setCurrent(id);
       acceptSelection(selectParagraph(leaveSelection(selectionSession), id, false));
     };
-    if (id === current) action(); else guardSwitch(action, true);
+    action();
   }
   function editTemplate(value: StoredTemplate | null, create = false) {
     const action = () => { setTemplate(value ? templateDraft(value) : create ? emptyTemplate() : null); setExtraction(null); setTemplatePreviewEnabled(true); setTab('templates'); };
-    if (templateDirty(template, library?.items || []) || extraction) setPendingSwitch({ action, objectOnly: false, message: '模板还有未保存的编辑，继续会丢弃这份模板草稿。已应用的文档格式不受影响。' });
+    if (templateDirty(template, library?.items || []) || extraction) setPendingSwitch({ action, message: '模板还有未保存的编辑，继续会丢弃这份模板草稿。已应用的文档格式不受影响。' });
     else action();
   }
   function refreshTemplates() { void run(async () => { setLibrary(await api.templates()); templateLive.retry(); }); }
@@ -398,14 +390,14 @@ export default function App() {
           onRetry={() => { if (templateLive.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else templateLive.retry(); }}
           onChange={value => { setTemplate(value); setTemplatePreviewEnabled(true); }} onExtract={extractTemplate} onExtraction={setExtraction} onAdopt={adoptExtraction}
           onSave={saveTemplate} onDelete={deleteTemplate} onImport={importTemplate} onApply={applyTemplate}
-        /> : <ObjectInspector block={currentBlock} busy={busy} onSave={annotate} tagDraft={tagDraft} onTagDraft={setTagDraft} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
+        /> : <ObjectInspector block={currentBlock} busy={busy} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">
       <div><span className="status-dot" /><span>本地运行</span><span className="status-divider" />{doc && <><span>{doc.blocks.length} 个段落</span><span className="status-divider" /><span>{!selectionActive ? '未筛选' : matching ? '正在匹配…' : `筛选匹配 ${matched.length} 段`}</span>{selectionActive && <button disabled={busy} onClick={exitSelection}>退出筛选</button>}</>}</div>
       <div className="history-controls"><button disabled={busy || !doc?.undo_label} onClick={() => history('undo')} title={doc?.undo_label ? `撤销：${doc.undo_label} (Ctrl+Z)` : '没有可撤销操作'}><Undo2 size={14} />撤销</button><button disabled={busy || !doc?.redo_label} onClick={() => history('redo')} title={doc?.redo_label ? `重做：${doc.redo_label} (Ctrl+Shift+Z)` : '没有可重做操作'}><Redo2 size={14} />重做</button><span className="status-divider" /><span>即时格式预览</span></div>
     </footer>
-    {pendingSwitch && <DraftDialog objectOnly={pendingSwitch.objectOnly} message={pendingSwitch.message} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
+    {pendingSwitch && <DraftDialog message={pendingSwitch.message} onCancel={() => setPendingSwitch(null)} onDiscard={() => { const action = pendingSwitch.action; setPendingSwitch(null); action(); }} />}
     {report && <ExportInspection report={report} onClose={() => setReport(null)} />}
     {message && <div className={`toast ${message.error ? 'error' : ''}`} role={message.error ? 'alert' : 'status'}><span>{message.error ? '!' : <Check size={16} />}</span><p>{message.text}</p><button className="icon-button" onClick={() => setMessage(null)} aria-label="关闭提示"><X size={14} /></button></div>}
   </div>;

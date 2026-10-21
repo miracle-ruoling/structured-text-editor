@@ -13,9 +13,9 @@ export function BulkAnnotations({ count, disabled, tags, draft, onDraft, onApply
     const payload: BulkAnnotation = isTag ? { action, tag: draft.trim() } : action === 'set_role' ? { action, role } : { action };
     if (await onApply(payload)) onDraft('');
   }
-  return <details className="bulk-annotations"><summary title="按当前筛选一次性标注，可撤销；标签和类别变化会使现有规则重新匹配。"><Tags size={15} />批量标注 <span>当前筛选 · {count} 段</span></summary>
-    <div className="field-stack"><select aria-label="批量标注动作" value={action} onChange={e => onAction(e.target.value as BulkAnnotation['action'])}>{Object.entries(names).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select>
-      {isTag ? <ChoiceInput label="批量标签" value={draft} options={tags} onChange={onDraft} maxLength={40} placeholder="选择或输入标签" /> : action === 'set_role' ? <select aria-label="批量设置类别" value={role} onChange={e => onRole(e.target.value as Role)}>{Object.entries(roles).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select> : null}
+  return <details className="bulk-annotations"><summary title="按当前筛选标注并自动保存，可撤销。"><Tags size={15} />标注 <span>当前筛选 · {count} 段</span></summary>
+    <div className="field-stack"><select aria-label="标注动作" value={action} onChange={e => onAction(e.target.value as BulkAnnotation['action'])}>{Object.entries(names).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select>
+      {isTag ? <ChoiceInput label="标签" value={draft} options={tags} onChange={onDraft} maxLength={40} placeholder="选择或输入标签" /> : action === 'set_role' ? <select aria-label="设置类别" value={role} onChange={e => onRole(e.target.value as Role)}>{Object.entries(roles).map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select> : null}
       <button className="secondary full" disabled={disabled || !count || (isTag && (!draft.trim() || draft.trim().length > 40))} onClick={() => void apply()}>{names[action]} · {count} 段</button>
 
     </div>

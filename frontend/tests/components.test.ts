@@ -175,7 +175,7 @@ test('阅读区取消框选工具，查看焦点与匹配范围独立，中文�
   assert.doesNotMatch(html, /框选|type="checkbox"|block-mark/);
   const selector = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'ids', op: 'is', value: '', ids: ['p3'] }] }, active: true, direct: true, tags: [], count: 1, saveName: '' });
   assert.match(selector, /直接选择/);
-  assert.match(selector, /点击换段 · Ctrl 点击切换段落/);
+  assert.doesNotMatch(selector, /点击换段 · Ctrl 点击切换段落/);
   assert.match(selector, /class="range-input"/);
   assert.match(selector, /range-input-tooltip/);
   assert.doesNotMatch(selector, /查看快照编号|段快照/);

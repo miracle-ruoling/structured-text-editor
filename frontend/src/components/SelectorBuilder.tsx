@@ -33,7 +33,6 @@ export function SelectorBuilder({ value, onChange, tags, count, loading, active,
   }
   return <section className="selector-section">
     <div className="section-heading"><span><SlidersHorizontal size={15} />{direct ? '直接选择' : '选择范围'} <HelpTip text="未启用筛选时，点击替换范围，Ctrl 点击切换段落。自定义筛选时，普通点击只查看；Ctrl 点击可加入或移除当前段落。每次点击独立生效，不依赖按住修饰键的时长。" /></span><div className="selector-tools"><button className={`logic-toggle ${advanced ? 'chosen' : ''}`} aria-label="高级逻辑表达式" aria-pressed={advanced} title={advanced ? '切回全部条件，替换当前表达式' : '使用 AND / OR / NOT 自由组合'} onClick={() => onChange(toggleExpression(value))}><Braces size={16} /></button><button className="text-button" onClick={onExit}><X size={13} />退出筛选</button></div></div>
-    {direct && <p className="direct-selection-hint">点击换段 · Ctrl 点击切换段落</p>}
     {!advanced && <div className="logic-line">匹配<select aria-label="条件组合方式" value={value.mode} onChange={e => onChange({ ...value, mode: e.target.value as Selector['mode'] })}><option value="all">全部条件</option><option value="any">任一条件</option></select>的段落</div>}
     <div className="condition-list">
       {value.conditions.map((condition, index) => <div className="condition-entry" key={condition.key || index}>

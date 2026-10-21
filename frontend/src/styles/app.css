@@ -138,8 +138,6 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .check-option input { width: 13px; height: 13px; flex: 0 0 13px; margin: 0; accent-color: var(--green); }
 .scope-option { margin-top: 20px; }
 .scope-note { font-size: 10px; color: #6b8d78; line-height: 1.8; margin-bottom: 0; }
-.autosave-note { display: flex; gap: 5px; align-items: flex-start; color: #9aa99f; font-size: 10px; line-height: 1.9; margin-top: 19px; }
-.autosave-note svg { margin-top: 3px; }
 .operation-footer .cancel-preview { height: 37px; font-size: 12px; border-color: #bed2c8; color: #507a65; }
 .draft-dialog { max-width: 430px; width: calc(100vw - 40px); border: 1px solid #dce5de; border-radius: 12px; padding: 24px; color: #526959; box-shadow: 0 15px 55px #18332438; }
 .draft-dialog::backdrop { background: #17332938; backdrop-filter: blur(2px); }
@@ -235,18 +233,6 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .object-identity > span:first-child { display: inline-flex; align-items: center; gap: 7px; }
 .object-identity > span:last-child { font-size: 10px; color: #8ba28f; background: #f1f6f1; padding: 3px 6px; border-radius: 4px; }
 .object-excerpt { margin: 17px 0 21px; padding: 12px; font-size: 11px; line-height: 1.9; background: #f7f9f7; border-left: 2px solid #c2d4c4; color: #88998b; max-height: 130px; overflow: auto; overflow-wrap: anywhere; border-radius: 0 4px 4px 0; white-space: pre-wrap; }
-.required { font-size: 9px; font-weight: 400; color: #a9b3aa; }
-.classification-source { display: flex; gap: 6px; font-size: 10px; line-height: 1.8; color: #a2aea4; margin-top: 9px; }
-.classification-source svg { margin-top: 3px; }
-.tag-field { margin-top: 23px; }
-.editable-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
-.editable-tags > span { display: flex; gap: 4px; align-items: center; font-size: 11px; color: #7b9780; border: 1px solid #dfeadf; background: #f4f8f3; padding: 4px 5px 4px 7px; border-radius: 4px; }
-.editable-tags button { padding: 0 1px; color: #8ca291; }
-.editable-tags p { margin: 2px 0 6px; color: #b0bab1; font-size: 11px; }
-.add-tag { display: flex; gap: 6px; align-items: center; margin-top: 10px; }
-.add-tag input { font-size: 11px; }
-.add-tag .icon-button { flex: 0 0 28px; height: 34px; background: #f2f6f2; color: #7e9a82; }
-.tag-shortcut { margin-top: 10px; font-size: 10px; }
 .save-annotation { margin-top: 23px; }
 .source-section { margin-top: 25px; padding-top: 20px; border-top: 1px solid var(--line); }
 .source-section .section-heading { margin-bottom: 13px; }
@@ -368,7 +354,6 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .saved-selections .nav-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .saved-selections > p { padding: 0 10px; color: #96a399; font-size: 10px; line-height: 1.8; }
 .saved-selections .icon-button { flex-shrink: 0; width: 24px; }
-.reset-role { margin-top: 7px; font-size: 10px; }
 .object-format-button { margin-top: 18px; }
 @media (max-width: 1080px) {
   .saved-selections { margin-top: 20px; }
@@ -535,4 +520,3 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .document-block.matched:not(.pending) { background: #f4f9f5; }
 .document-block.focused.focus-muted:not(.matched):not(.pending) { border-color: #bdc3c4; background: #f2f4f4; box-shadow: none; }
 .document-block.focused.focus-muted:not(.matched):not(.pending)::after { content: '仅查看'; color: #737d7e; background: #f2f4f4; }
-.direct-selection-hint { font-size: 11px; color: var(--muted); margin: 0 0 9px; }
