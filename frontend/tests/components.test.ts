@@ -22,7 +22,7 @@ const draft: FormatRule = { id: 'a'.repeat(32), name: '正文', selector: { mode
 
 test('规则预览使用完整的逐段结果，恢复混合字号时不残留统一字号', () => {
   const afterBlock = { ...paragraph, format: {}, mixed: ['size_pt'], runs: [{ text: '混合', format: { size_pt: 12 } }, { text: '字号', format: { size_pt: 24 } }] };
-  const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: [], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, marked: [], marking: false, showTags: true, onlyMatches: false, zoom: 100, busy: false });
+  const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: [], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, showTags: true, onlyMatches: false, zoom: 100, busy: false });
   const before = html.slice(html.indexOf('comparison-before'), html.indexOf('comparison-after'));
   const afterHtml = html.slice(html.indexOf('comparison-after'));
   assert.match(before, /font-size:18pt/);
@@ -61,7 +61,7 @@ test('批量标注无有效范围时不能提交，返回面板保留移除动�
 });
 
 test('未启用筛选时不渲染活动条件、表达式和保存区域', () => {
-  const html = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'tag', op: 'is', value: '旧条件' }] }, active: false, canResume: true, tags: [], marked: [], count: 0, saveName: '' });
+  const html = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'tag', op: 'is', value: '旧条件' }] }, active: false, canResume: true, tags: [], count: 0, saveName: '' });
   assert.match(html, /未启用筛选/);
   assert.match(html, /恢复上次筛选/);
   assert.doesNotMatch(html, /旧条件|高级关系式|保存此筛选/);
@@ -99,7 +99,7 @@ test('分页与粗斜体区分不设置和显式关闭', () => {
 });
 
 test('失效的章节条件保持可见，绝不静默换成其他章节', () => {
-  const html = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'chapter', op: 'is_not', value: 'p4' }] }, active: true, chapters: [{ id: 'p8', name: '第二章', level: 1, count: 4 }], sections: [], marked: [], tags: [], count: 0, saveName: '' });
+  const html = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'chapter', op: 'is_not', value: 'p4' }] }, active: true, chapters: [{ id: 'p8', name: '第二章', level: 1, count: 4 }], sections: [], tags: [], count: 0, saveName: '' });
   assert.match(html, /value="p4" selected="">已失效 · p4/);
   assert.match(html, /第二章 · 4 段/);
   const rules = render(ui.RulePanel, { rules: [{ ...draft, scope_warning: '范围已失效，规则暂不匹配：章节 p4', matched_count: 0, effective_count: 0 }], draft: null, preview: null, busy: false, canUseScope: false });
@@ -108,7 +108,7 @@ test('失效的章节条件保持可见，绝不静默换成其他章节', () =>
 
 test('相对预览保留不同片段字号，显式关闭粗斜体输出正常字重', () => {
   const afterBlock = { ...paragraph, format: { bold: false, italic: false }, mixed: ['size_pt'], runs: [{ text: '混合', format: { size_pt: 13, bold: false, italic: false } }, { text: '字号', format: { size_pt: 25 } }] };
-  const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: ['p3'], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, marked: [], marking: false, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false });
+  const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: ['p3'], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false });
   const afterHtml = html.slice(html.indexOf('comparison-after'));
   assert.match(afterHtml, /font-size:13pt/);
   assert.match(afterHtml, /font-size:25pt/);
@@ -127,7 +127,7 @@ test('导出检查标明已保存修订、混合字号差异及兼容性边界',
 
 test('即时预览默认只渲染结果，需要时可切换原文对照', () => {
   const afterBlock = { ...paragraph, format: { size_pt: 24 }, runs: [{ text: '字号结果', format: { size_pt: 24 } }] };
-  const props = { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: ['p3'], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, marked: [], marking: false, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false, livePreview: true, compare: false };
+  const props = { doc: { id: 'doc', revision: 1, name: '示例', blocks: [paragraph], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: ['p3'], current: null, preview: { revision: 1, ids: ['p3'], changes: [], after_blocks: [afterBlock] }, patch: {}, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false, livePreview: true, compare: false };
   const html = render(ui.DocumentCanvas, props);
   assert.match(html, /font-size:24pt/);
   assert.doesNotMatch(html, /font-size:18pt|comparison-before/);
@@ -137,4 +137,32 @@ test('即时预览默认只渲染结果，需要时可切换原文对照', () =>
   assert.match(comparing, /font-size:18pt/);
   const updating = render(ui.DocumentCanvas, { ...props, previewPending: true });
   assert.match(updating, /当前仍为上次效果/);
+});
+
+test('清空草稿后显示已保存开关但不产生待应用属性，修改值优先于当前值', () => {
+  const props = { draft: { patch: {}, sizeChange: null }, onChange: noop, preview: null, ready: false, pending: false, error: null, count: 1, blocks: [{ ...paragraph, runs: [{ text: '中文 English', format: { italic: true, bold: false } }] }], matched: ['p3'], selectionActive: true, busy: false };
+  const html = render(ui.FormatPanel, props);
+  assert.match(html, /value="" selected="">开启 · 当前/);
+  assert.match(html, /value="" selected="">关闭 · 当前/);
+  assert.doesNotMatch(html, /draft-summary/);
+  assert.match(html, /<button class="primary" disabled="">应用到 1 段/);
+  const modified = render(ui.FormatPanel, { ...props, draft: { patch: { italic: false }, sizeChange: null } });
+  assert.match(modified, /value="false" selected="">关闭/);
+  assert.match(modified, /斜体 · 否/);
+  const mixed = render(ui.FormatPanel, { ...props, blocks: [{ ...paragraph, runs: [{ text: '中文', format: { italic: true } }, { text: 'English', format: { italic: false } }] }] });
+  assert.match(mixed, /value="" selected="">混合 · 保持各自/);
+});
+
+test('阅读区取消框选工具，查看焦点与匹配范围独立，中文和西文保留各自斜体', () => {
+  const italic = { ...paragraph, runs: [{ text: '中文斜体', format: { italic: true, font_east_asia: '宋体' } }, { text: 'English', format: { italic: false } }] };
+  const html = render(ui.DocumentCanvas, { doc: { id: 'doc', revision: 1, name: '示例', blocks: [italic], layout: [{ kind: 'paragraph', id: 'p3' }], warnings: [] }, matched: [], current: 'p3', focusMuted: true, preview: null, patch: {}, showTags: true, onlyMatches: false, selectionActive: true, zoom: 100, busy: false });
+  assert.match(html, /focused focus-muted/);
+  assert.match(html, /aria-pressed="false"/);
+  assert.match(html, /font-style:italic[^>]*>中文斜体/);
+  assert.match(html, /font-style:normal[^>]*>English/);
+  assert.doesNotMatch(html, /框选|type="checkbox"|block-mark/);
+  const selector = render(ui.SelectorBuilder, { value: { mode: 'all', conditions: [{ field: 'ids', op: 'is', value: '', ids: ['p3'] }] }, active: true, direct: true, tags: [], count: 1, saveName: '' });
+  assert.match(selector, /直接选择/);
+  assert.match(selector, /点击换段 · Ctrl 点击扩选/);
+  assert.doesNotMatch(selector, /框选/);
 });

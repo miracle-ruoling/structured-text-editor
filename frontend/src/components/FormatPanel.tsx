@@ -6,6 +6,7 @@ import type { FormatDraft } from '../lib/formatDraft';
 import { inputSize, stepSize } from '../lib/formatDraft';
 import { FormatFields } from './FormatFields';
 import { HelpTip } from './HelpTip';
+import { currentFlags } from '../lib/formatState';
 
 type Props = {
   draft: FormatDraft; onChange: (draft: FormatDraft) => void; preview: Preview | null;
@@ -18,6 +19,10 @@ export function FormatPanel({ draft, onChange, preview, onApply, onCancel, onRet
   const [visibleChanges, setVisibleChanges] = useState(30);
   const { patch, sizeChange } = draft;
   const countFields = Object.keys(patch).length + (sizeChange ? 1 : 0);
+  const flagStates = useMemo(() => {
+    const ids = new Set(matched);
+    return currentFlags(blocks.filter(block => ids.has(block.id)));
+  }, [blocks, matched]);
   const sizePlaceholder = useMemo(() => {
     if (pending) return '更新中…';
     const ids = new Set(matched);
@@ -28,7 +33,7 @@ export function FormatPanel({ draft, onChange, preview, onApply, onCancel, onRet
   return <>
     <section className="format-section compact-format">
       <div className="section-heading"><span>格式 <HelpTip text="修改会自动预览，点击应用才保存。所有填写的属性一起提交，折叠分组不排除设置。取消修改或 Esc 恢复已保存视图；已应用的结果可撤销。" /></span><span className="auto-preview-label">自动预览</span></div>
-      <FormatFields patch={patch} onChange={value => onChange({ ...draft, patch: value })} sizeChange={sizeChange}
+      <FormatFields patch={patch} onChange={value => onChange({ ...draft, patch: value })} sizeChange={sizeChange} flagStates={flagStates}
         onSizeInput={value => onChange(inputSize(draft, value))} onSizeStep={direction => { const next = stepSize(draft, direction); if (next) onChange(next); }}
         sizePlaceholder={sizePlaceholder} canGrow={stepSize(draft, 1) != null} canShrink={stepSize(draft, -1) != null} />
     </section>

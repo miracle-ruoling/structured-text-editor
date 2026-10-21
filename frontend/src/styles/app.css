@@ -93,8 +93,8 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .document-block:hover { background: #f9fbf9; }
 .document-block.matched { background: #f4f9f5; }
 .document-block.matched::before { content: ''; position: absolute; left: -1px; top: 9px; bottom: 8px; width: 2px; border-radius: 2px; background: #a1c3ac; }
-.document-block.focused { border-color: #a598c4; background: #f5f1fa; box-shadow: 0 0 0 1px #d4c9e74f; }
-.document-block.focused::after { content: '正在查看'; position: absolute; right: 7px; top: 6px; font: 9px "Microsoft YaHei", sans-serif; color: #927baa; background: #f5f1fa; padding: 2px 5px; border-radius: 3px; }
+.document-block.focused:not(.matched):not(.pending) { border-color: #a598c4; background: #f5f1fa; box-shadow: 0 0 0 1px #d4c9e74f; }
+.document-block.focused:not(.matched):not(.pending)::after { content: '正在查看'; position: absolute; right: 7px; top: 6px; font: 9px "Microsoft YaHei", sans-serif; color: #927baa; background: #f5f1fa; padding: 2px 5px; border-radius: 3px; }
 .document-block.pending { background: #f2f7fb; border-color: #c8dce5; }
 .document-block.pending::before { background: #89b2c5; }
 .block-index { font: 9px "Segoe UI", sans-serif; color: #bdc6bf; position: absolute; left: -25px; top: 12px; font-variant-numeric: tabular-nums; }
@@ -340,12 +340,6 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 .saved-selections .icon-button { flex-shrink: 0; width: 24px; }
 .reset-role { margin-top: 7px; font-size: 10px; }
 .object-format-button { margin-top: 18px; }
-.block-mark { display: flex; align-items: center; gap: 5px; width: fit-content; font: 10px 'Microsoft YaHei', sans-serif; color: #9a8046; margin-bottom: 7px; cursor: pointer; }
-.block-mark input { width: 14px; height: 14px; margin: 0; accent-color: #ad8e45; }
-.marking-banner { display: flex; flex-wrap: wrap; gap: 9px; align-items: center; padding: 10px 24px; font-size: 10px; color: #907e50; background: #faf7ec; border-bottom: 1px solid #e9e2cb; }
-.marking-banner > span { flex: 1; min-width: 160px; }
-.marking-banner .secondary { height: 28px; font-size: 10px; padding: 0 9px; border-color: #e1d7b9; }
-.marking-banner .text-button { font-size: 10px; color: #9b8a5f; }
 @media (max-width: 1080px) {
   .saved-selections { margin-top: 20px; }
   .saved-selections > p { display: none; }
@@ -505,3 +499,10 @@ svg { flex-shrink: 0; stroke-width: 1.7; }
 
 .field-label .help-tip > [role="tooltip"] { left: -40px; right: auto; }
 .expression-editor .help-tip > [role="tooltip"] { left: 0; right: auto; }
+
+/* Document fonts may have no italic face; keep synthesis local to the reading content. */
+.paragraph-text { font-synthesis: style; }
+.document-block.matched:not(.pending) { background: #f4f9f5; }
+.document-block.focused.focus-muted:not(.matched):not(.pending) { border-color: #bdc3c4; background: #f2f4f4; box-shadow: none; }
+.document-block.focused.focus-muted:not(.matched):not(.pending)::after { content: '仅查看'; color: #737d7e; background: #f2f4f4; }
+.direct-selection-hint { font-size: 11px; color: var(--muted); margin: 0 0 9px; }

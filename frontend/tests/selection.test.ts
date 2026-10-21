@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition, selectorSignature, toggleExpression, withKeys } from '../src/lib/selection.ts';
+import { activateSelection, emptySelectionSession, endPointerGesture, leaveSelection, nextKey, rangeCondition, selectParagraph, selectorSignature, toggleExpression, withKeys } from '../src/lib/selection.ts';
 import { selectorComplete } from '../src/lib/workspace.ts';
 import type { Selector } from '../src/lib/types.ts';
 
@@ -69,4 +69,81 @@ test('高级模式删完条件保持失效表达式可修正，不能落入空 A
   assert.equal(dangling.selector.mode, 'expression');
   assert.equal(dangling.selector.expression, '$A');
   assert.equal(leaveSelection(dangling).active, false);
+});
+
+test('直接点选立即建立范围，普通点击换段，分次 Ctrl 也向同一范围去重扩选', () => {
+  const one = selectParagraph(emptySelectionSession(), 'p1', false);
+  assert.equal(one.active, true); assert.equal(one.direct, true);
+  const two = selectParagraph(one, 'p2', false);
+  assert.deepEqual(two.selector.conditions[0].ids, ['p2']);
+  const three = selectParagraph(endPointerGesture(selectParagraph(two, 'p3', true)), 'p4', true);
+  assert.equal(three.selector.conditions.length, 1);
+  assert.deepEqual(selectParagraph(three, 'p3', true).selector.conditions[0].ids, ['p2', 'p3', 'p4']);
+  assert.deepEqual(one.selector.conditions[0].ids, ['p1']);
+  assert.equal(selectParagraph(emptySelectionSession(), 'p5', true).direct, true);
+});
+
+test('自定义筛选中的普通点选不改变范围，Ctrl 一次按住合并，释放后建立新快照', () => {
+  const base = activateSelection(emptySelectionSession(), { mode: 'any', conditions: [{ field: 'role', op: 'is', value: 'body' }] });
+  assert.strictEqual(selectParagraph(base, 'p9', false), base);
+  const first = selectParagraph(base, 'p1', true);
+  const second = selectParagraph(first, 'p2', true);
+  assert.equal(second.selector.mode, 'any');
+  assert.deepEqual(second.selector.conditions[1].ids, ['p1', 'p2']);
+  assert.deepEqual(first.selector.conditions[1].ids, ['p1']);
+  assert.strictEqual(selectParagraph(second, 'p1', true), second);
+  const nextGesture = selectParagraph(endPointerGesture(second), 'p3', true);
+  assert.equal(nextGesture.selector.conditions.length, 3);
+  assert.deepEqual(nextGesture.selector.conditions[1].ids, ['p1', 'p2']);
+  assert.deepEqual(nextGesture.selector.conditions[2].ids, ['p3']);
+  assert.notEqual(nextGesture.gestureKey, second.gestureKey);
+});
+
+test('编辑条件后退出直接点选模式；普通点击、换页或失焦结束手势且不重算选择器', () => {
+  const direct = selectParagraph(emptySelectionSession(), 'p1', false);
+  const filtered = activateSelection(direct, { ...direct.selector, conditions: [...direct.selector.conditions, { field: 'role', op: 'is', value: 'body' }] });
+  assert.equal(filtered.direct, false);
+  const added = selectParagraph(filtered, 'p2', true);
+  const ordinary = selectParagraph(added, 'p3', false);
+  assert.equal(ordinary.gestureKey, null);
+  assert.strictEqual(ordinary.selector, added.selector);
+  assert.strictEqual(endPointerGesture(added).selector, added.selector);
+  const edited = activateSelection(added, added.selector);
+  assert.equal(edited.gestureKey, null);
+  assert.equal(selectParagraph(edited, 'p4', true).selector.conditions.length, 4);
+});
+
+test('退出筛选后重新点选不恢复旧条件；恢复保存的快照为筛选状态', () => {
+  const first = selectParagraph(emptySelectionSession(), 'p1', false);
+  const idle = leaveSelection(first);
+  const next = selectParagraph(idle, 'p2', true);
+  assert.deepEqual(next.selector.conditions[0].ids, ['p2']);
+  assert.deepEqual(idle.previous?.conditions[0].ids, ['p1']);
+  const restored = activateSelection(idle, idle.previous!, true);
+  assert.equal(restored.direct, false);
+  assert.strictEqual(selectParagraph(restored, 'p9', false).selector, restored.selector);
+});
+
+test('显式全选不因普通点击缩小，高级 Ctrl 条件保留原式及悬空代号', () => {
+  const all = activateSelection(emptySelectionSession(), { mode: 'all', conditions: [] }, true);
+  assert.strictEqual(selectParagraph(all, 'p1', false), all);
+  assert.equal(selectParagraph(all, 'p1', true).direct, false);
+  const advanced = activateSelection(emptySelectionSession(), {
+    mode: 'expression', conditions: [rangeCondition(['p1'], 'A')], expression: '$A OR NOT $B',
+  });
+  const added = selectParagraph(advanced, 'p2', true);
+  assert.equal(added.gestureKey, 'C');
+  assert.equal(added.selector.expression, '($A OR NOT $B) AND $C');
+  assert.equal(selectParagraph(added, 'p3', true).selector.expression, added.selector.expression);
+  const emptyExpression = activateSelection(advanced, { ...advanced.selector, expression: '' });
+  assert.equal(selectorComplete(selectParagraph(emptyExpression, 'p4', true).selector), false);
+});
+
+test('条件上限不丢失原筛选，仍允许向本次最后一组增加段落', () => {
+  const base = activateSelection(emptySelectionSession(), { mode: 'all', conditions: Array.from({ length: 29 }, () => ({ field: 'role', op: 'is', value: 'body' })) });
+  const last = selectParagraph(base, 'p1', true);
+  assert.equal(last.selector.conditions.length, 30);
+  assert.deepEqual(selectParagraph(last, 'p2', true).selector.conditions[29].ids, ['p1', 'p2']);
+  assert.throws(() => selectParagraph(endPointerGesture(last), 'p3', true), /最多 30/);
+  assert.equal(base.selector.conditions.length, 29);
 });

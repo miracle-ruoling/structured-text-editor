@@ -4,9 +4,11 @@ import { fieldCount, stepSize } from '../lib/formatDraft';
 import { HelpTip } from './HelpTip';
 import { ChoiceInput } from './ChoiceInput';
 import { FontSizeControl } from './FontSizeControl';
+import { flagStateLabel } from '../lib/formatState';
+import type { FlagKey, FlagStates } from '../lib/formatState';
 
-type Props = { patch: FormatPatch; onChange: (value: FormatPatch) => void; sizeChange?: SizeChange | null; onSizeInput?: (value: string) => void; onSizeStep?: (direction: 1 | -1) => void; sizePlaceholder?: string; canGrow?: boolean; canShrink?: boolean };
-export function FormatFields({ patch, onChange, sizeChange, onSizeInput, onSizeStep, sizePlaceholder, canGrow, canShrink }: Props) {
+type Props = { patch: FormatPatch; onChange: (value: FormatPatch) => void; sizeChange?: SizeChange | null; onSizeInput?: (value: string) => void; onSizeStep?: (direction: 1 | -1) => void; sizePlaceholder?: string; canGrow?: boolean; canShrink?: boolean; flagStates?: FlagStates };
+export function FormatFields({ patch, onChange, sizeChange, onSizeInput, onSizeStep, sizePlaceholder, canGrow, canShrink, flagStates }: Props) {
   function update(key: keyof FormatPatch, value: string) {
     const next = { ...patch };
     if (value === '') delete next[key];
@@ -14,7 +16,7 @@ export function FormatFields({ patch, onChange, sizeChange, onSizeInput, onSizeS
     onChange(next);
   }
   const numberField = (key: keyof FormatPatch, label: string, unit: string, min: number, max: number, step: number) => <label className="field" key={key}><span>{label}</span><div className="unit-input"><input aria-label={label} type="number" min={min} max={max} step={step} placeholder="保持原样" value={patch[key] == null ? '' : String(patch[key])} onChange={e => update(key, e.target.value)} /><span>{unit}</span></div></label>;
-  const flagField = (key: keyof FormatPatch, label: string) => <label className="field" key={key}><span>{label}</span><select aria-label={label} value={patch[key] == null ? '' : String(patch[key])} onChange={e => update(key, e.target.value)}><option value="">不设置</option><option value="true">开启</option><option value="false">关闭</option></select></label>;
+  const flagField = (key: FlagKey, label: string) => <label className="field" key={key}><span>{label}</span><select aria-label={label} title="带有当前状态的选项表示保持已保存值，不加入本次修改。选择开启或关闭才设置此项。" value={patch[key] == null ? '' : String(patch[key])} onChange={e => update(key, e.target.value)}><option value="">{flagStateLabel(flagStates?.[key])}</option><option value="true">开启</option><option value="false">关闭</option></select></label>;
   const fontCount = fieldCount(patch, 'font') + (sizeChange ? 1 : 0);
   const paragraphCount = fieldCount(patch, 'paragraph');
   return <div className="format-groups">

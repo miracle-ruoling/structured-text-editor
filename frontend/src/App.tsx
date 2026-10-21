@@ -14,7 +14,8 @@ import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, Forma
 import { selectorComplete } from './lib/workspace';
 import { emptyFormatDraft } from './lib/formatDraft';
 import { useFormatPreview } from './lib/useFormatPreview';
-import { activateSelection, emptySelectionSession, leaveSelection, nextKey, rangeCondition } from './lib/selection';
+import { activateSelection, emptySelectionSession, endPointerGesture, leaveSelection, selectParagraph } from './lib/selection';
+import type { SelectionSession } from './lib/selection';
 import { newRule, ruleDraft, ruleIsDirty } from './lib/rules';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
@@ -28,8 +29,6 @@ export default function App() {
   const [matching, setMatching] = useState(false);
   const [selectorError, setSelectorError] = useState<string | null>(null);
   const [saveName, setSaveName] = useState('');
-  const [marking, setMarking] = useState(false);
-  const [marked, setMarked] = useState<string[]>([]);
   const [formatDraft, setFormatDraft] = useState(emptyFormatDraft);
   const { patch, sizeChange } = formatDraft;
   const [report, setReport] = useState<ExportReport | null>(null);
@@ -55,6 +54,19 @@ export default function App() {
   const live = useFormatPreview(doc, selector, formatDraft, tab === 'batch' && !busy && selectionActive && selectorComplete(selector) && !matching && !selectorError && matched.length > 0);
   const preview = live.preview;
   const clearFormatDraft = useCallback(() => { setFormatDraft(emptyFormatDraft()); }, []);
+
+  useEffect(() => {
+    const finish = () => setSelectionSession(endPointerGesture);
+    const release = (event: KeyboardEvent) => { if (event.key === 'Control' || event.key === 'Meta') finish(); };
+    const visibility = () => { if (document.hidden) finish(); };
+    window.addEventListener('keyup', release);
+    window.addEventListener('blur', finish);
+    document.addEventListener('visibilitychange', visibility);
+    return () => {
+      window.removeEventListener('keyup', release); window.removeEventListener('blur', finish);
+      document.removeEventListener('visibilitychange', visibility);
+    };
+  }, []);
 
   const acceptDoc = useCallback((value: DocumentView) => {
     setDoc(value); setRulePreview(null); setReport(null);
@@ -154,6 +166,9 @@ export default function App() {
 
   function changeSelector(value: Selector, explicitAll = false) {
     const next = activateSelection(selectionSession, value, explicitAll);
+    acceptSelection(next);
+  }
+  function acceptSelection(next: SelectionSession) {
     setRulePreview(null); setMatched([]); setSelectorError(null); setSelectionSession(next); setTab('batch');
     setMatching(next.active);
     if (!next.active) setOnlyMatches(false);
@@ -165,7 +180,7 @@ export default function App() {
   function newDocument(document: DocumentView) {
     acceptDoc(document); setCurrent(null); setTagDraft(''); clearFormatDraft(); setCompare(false); setTab('batch'); setOnlyMatches(false);
     setSelectionSession(emptySelectionSession()); setMatched([]);
-    setSaveName(''); setMarking(false); setMarked([]); setSelectorError(null);
+    setSaveName(''); setSelectorError(null);
     setRule(null); setRulePreview(null); setBulkTagDraft('');
     setBulkAction('add_tag'); setBulkRole('body');
   }
@@ -178,6 +193,27 @@ export default function App() {
     if (busy) return;
     if (id === current) { changePanel('object'); return; }
     guardSwitch(() => { setCurrent(id); setTagDraft(''); changePanel('object'); }, true);
+  }
+  function pickParagraph(id: string, extend = false, independentGesture = false) {
+    if (busy || !doc) return;
+    const block = doc.blocks.find(item => item.id === id);
+    if (!block) return;
+    const isolated = independentGesture || (id !== current && !!tagDraft.trim());
+    const action = () => {
+      setCurrent(id); if (id !== current) setTagDraft('');
+      if (!block.editable) {
+        setSelectionSession(endPointerGesture);
+        if (!selectionActive) changePanel('object');
+        return;
+      }
+      try {
+        const base = isolated ? endPointerGesture(selectionSession) : selectionSession;
+        const next = selectParagraph(base, id, extend);
+        if (next.selector !== selectionSession.selector) acceptSelection(isolated ? endPointerGesture(next) : next);
+        else setSelectionSession(next);
+      } catch (error) { setMessage({ text: (error as Error).message, error: true }); }
+    };
+    if (id === current) action(); else guardSwitch(action, true);
   }
   function importFile(file?: File) {
     if (file) guardSwitch(() => void run(async () => {
@@ -207,13 +243,18 @@ export default function App() {
   }
   function changePanel(value: typeof tab) {
     if (busy) return;
-    setTab(value); setRulePreview(null);
+    setTab(value); setRulePreview(null); setSelectionSession(endPointerGesture);
   }
   function formatObject(id: string) {
-    changeSelector({ mode: 'all', conditions: [rangeCondition([id])] });
+    if (busy || !doc?.blocks.some(block => block.id === id && block.editable)) return;
+    const action = () => {
+      setCurrent(id); if (id !== current) setTagDraft('');
+      acceptSelection(selectParagraph(leaveSelection(selectionSession), id, false));
+    };
+    if (id === current) action(); else guardSwitch(action, true);
   }
   function editRule(value: FormatRule | null) {
-    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setTab('rules'); };
+    const action = () => { setRule(value ? ruleDraft(value) : null); setRulePreview(null); setTab('rules'); setSelectionSession(endPointerGesture); };
     if (ruleIsDirty(rule, doc?.rules || [])) setPendingSwitch({ action, objectOnly: false, message: '此规则还有未保存的编辑。继续会丢弃规则草稿；批量格式草稿和已保存的内容不受影响。' });
     else action();
   }
@@ -253,14 +294,6 @@ export default function App() {
       acceptDoc(await api.clearOverrides(doc, id, keys));
       setMessage({ text: '已清除本项目局部覆盖，恢复规则或原文档格式，可撤销', error: false });
     });
-  }
-
-  function addMarkedRange() {
-    if (busy || !marked.length) return;
-    const base: Selector = selectionActive ? selector : { mode: 'all', conditions: [] };
-    if (base.conditions.length >= 30) { setMessage({ text: '最多 30 个条件，请先删除不需要的条件再添加。', error: true }); return; }
-    const condition = rangeCondition(marked, nextKey(base));
-    changeSelector({ ...base, conditions: [...base.conditions, condition], expression: base.mode === 'expression' ? (base.expression?.trim() ? `(${base.expression}) AND $${condition.key}` : `$${condition.key}`) : '' });
   }
 
   async function saveCurrentSelector() {
@@ -308,22 +341,19 @@ export default function App() {
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
         onDeleteSelector={deleteSavedSelector}
         onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} />
-      <DocumentCanvas doc={doc} matched={tab === 'rules' ? [] : matched} current={tab === 'object' && !preview && !rulePreview ? current : null} busy={busy}
-        onPick={pickObject} onFormat={formatObject} preview={rulePreview || preview} patch={{}} livePreview={tab === 'batch'} previewPending={live.pending} previewError={live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (rulePreview) setRulePreview(null); else clearFormatDraft(); }}
+      <DocumentCanvas doc={doc} matched={tab === 'rules' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
+        onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true, true)} onFormat={formatObject} preview={rulePreview || preview} patch={{}} livePreview={tab === 'batch'} previewPending={live.pending} previewError={live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (rulePreview) setRulePreview(null); else clearFormatDraft(); }}
         showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'rules' && onlyMatches}
-        marking={marking} marked={marked} onMarking={() => setMarking(!marking)}
-        onMark={id => setMarked(ids => ids.includes(id) ? ids.filter(item => item !== id) : [...ids, id])}
-        onClearMarks={() => setMarked([])} onAddRange={addMarkedRange}
         onOnlyMatches={() => setOnlyMatches(!onlyMatches)} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'rules' && selectionActive} />
       <aside className="inspector">
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
-          <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />批量操作</button>
+          <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />操作</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => changePanel('object')}><Fingerprint size={15} />对象属性</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'rules'} className={tab === 'rules' ? 'active' : ''} onClick={() => changePanel('rules')}><Layers size={15} />规则</button>
         </div>
         <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
-            error={selectorError} marked={marked} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
+            error={selectorError} direct={selectionSession.direct} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
             loading={matching} active={selectionActive} onExit={exitSelection} canResume={previousSelector !== null}
             onResume={() => { if (previousSelector) changeSelector(previousSelector, true); }}
             onStart={() => changeSelector({ mode: 'all', conditions: [{ field: 'role', op: 'is', value: 'body' }] })} />

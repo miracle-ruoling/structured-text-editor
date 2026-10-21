@@ -5,7 +5,7 @@ import { FormatSources } from './FormatSources';
 
 type Props = { block: Block | null; busy: boolean; onSave: (id: string, patch: AnnotationPatch) => Promise<boolean>; tagDraft: string; onTagDraft: (value: string) => void; onFormat: (id: string) => void; onClearOverrides: (id: string, keys: string[]) => void; chapters?: Chapter[]; sections?: Section[] };
 export function ObjectInspector({ block, busy, onSave, tagDraft, onTagDraft, onFormat, onClearOverrides, chapters, sections }: Props) {
-  if (!block) return <div className="inspector-empty"><Fingerprint size={36} /><h3>查看一个对象</h3><p>点击文档中的段落，查看它的类别、标签和格式来源。</p></div>;
+  if (!block) return <div className="inspector-empty"><Fingerprint size={36} /><h3>查看一个对象</h3><p>右键点击段落并选择「检查对象」，查看类别、标签和格式来源。</p></div>;
   return <ObjectForm key={block.id} block={block} busy={busy} onSave={onSave} tagDraft={tagDraft} onTagDraft={onTagDraft} onFormat={onFormat} onClearOverrides={onClearOverrides} chapters={chapters} sections={sections} />;
 }
 
