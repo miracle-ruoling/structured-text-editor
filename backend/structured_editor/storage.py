@@ -249,6 +249,8 @@ class ProjectStore:
             **view,
             "id": project.id,
             "text_editing": project.text_editing,
+            "text_queue_version": 1,
+            "next_paragraph": project.next_paragraph,
             "name": project.name,
             "revision": project.revision,
             "updated_at": project.updated_at,
@@ -276,7 +278,15 @@ class ProjectStore:
         return self.view(project)
 
     def edit_text(self, project, operation):
+        from .domain.models import TextEditReceipt
+        receipt = project.text_receipt
+        if operation.request_id and receipt and receipt.request.request_id == operation.request_id:
+            if receipt.request != operation or receipt.revision != project.revision:
+                raise ValueError('保存请求已失效，不能重放；请保留本地文字并重新打开文档')
+            return {**self.view(project), "edit_focus": receipt.focus}
         focus = edit_document(self.source(project.id), project, operation)
+        project.text_receipt = (TextEditReceipt(request=operation, revision=project.revision, focus=focus)
+                                if operation.request_id else None)
         self.save(project)
         return {**self.view(project), "edit_focus": focus}
 

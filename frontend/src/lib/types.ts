@@ -27,6 +27,7 @@ export type Block = {
 };
 export type Layout = { kind: 'paragraph'; id: string } | { kind: 'table'; rows: { span: number; children: Layout[] }[][] } | { kind: 'unsupported'; label: string; children: Layout[] };
 export type DocumentView = {
+  text_queue_version?: number; next_paragraph?: number;
   text_editing?: boolean; edit_focus?: string;
   id: string; name: string; revision: number; updated_at: string;
   blocks: Block[]; layout: Layout[]; warnings: string[]; undo_label: string | null; redo_label: string | null;

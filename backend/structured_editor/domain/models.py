@@ -216,6 +216,7 @@ class EditableDocument(Model):
 
 class TextEditRequest(Model):
     revision: int
+    request_id: str | None = Field(default=None, min_length=1, max_length=80)
     action: Literal["replace", "split", "join", "delete", "category", "paste"]
     id: str = Field(pattern=r"^p[1-9][0-9]*$")
     text: str | None = Field(default=None, max_length=100000)
@@ -241,6 +242,12 @@ class TextEditRequest(Model):
                 or 0xE000 <= ord(c) <= 0xFFFD or 0x10000 <= ord(c) <= 0x10FFFF) for c in (self.text or '') + (self.draft or '')):
             raise ValueError("正文包含不支持的控制字符")
         return self
+
+
+class TextEditReceipt(Model):
+    request: TextEditRequest
+    revision: int = Field(ge=0)
+    focus: str = Field(pattern=r"^p[1-9][0-9]*$")
 
 
 class Snapshot(Model):
@@ -275,6 +282,7 @@ class Project(Model):
     text_editing: bool = False
     content: EditableDocument | None = None
     next_paragraph: int = Field(default=1, ge=1)
+    text_receipt: TextEditReceipt | None = None
     native_origin: str | None = None
 
     @model_validator(mode="before")

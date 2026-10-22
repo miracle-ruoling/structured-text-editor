@@ -5,7 +5,7 @@ import type { TextOperation } from '../lib/textEditing';
 import { paragraphInsets } from '../lib/workspace';
 
 export type TextEditorProps = {
-  onEdit: (operation: TextOperation) => Promise<{ id: string; text: string } | null>;
+  onEdit: (operation: TextOperation) => Promise<{ id: string; text: string; sourceText?: string } | null>;
   onTextState: (id: string, dirty: boolean, saving: boolean) => void;
   editorFocus?: { id: string; offset: number; choose: boolean; token: number } | null;
   onHistory: (direction: 'undo' | 'redo') => Promise<void>;
@@ -111,6 +111,7 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
         if (result) {
           if (combined) {
             persisted.current = draft.current;
+            if (result.sourceText !== undefined) draft.current = persisted.current = result.sourceText;
             if (result.id === block.id) draft.current = persisted.current = result.text;
           }
           setChooser(false); setError('');

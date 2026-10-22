@@ -321,3 +321,12 @@ HTTP 入口：`/api/templates` 列表，`/save`、`/delete`、`/restore`、`/imp
 
 - 类别菜单确认与结构提交分开：已是正文时确认不请求；其他类别请求加入 App 串行文字链，编辑器不禁用，不请求焦点。categoryPending/failedCategory 参与未保存状态，保存与结构动作等待类别成功；失败可重试，文字继续保留。categoryChosen 防止确认后的空段再次聚焦时重开数字菜单。
 - compatibleTextEdit 对精确的 draft 额外字段 422 拒绝进行兼容；首次失败不写入，可安全先 replace，再携带最新 revision 发原结构动作。中间成功通过 onSaved 更新 docRef，后续失败不回退版本。只在当前页面记忆不支持 draft；网络错误、409 或其他 422 不降级重放。旧路径保留两次历史，新路径单次原子历史不变。
+
+## 23. 3D：本地结构事务与后台队列（2026-10-22，现行）
+
+- 文档视图新增 text_queue_version=1 与 next_paragraph。仅支持该协议的服务启用 TextQueue；旧服务仍走 compatibleTextEdit 与原同步结构路径。第 21 节“不采用乐观结构”的限制由本节替代。
+- 前端 textQueue.ts 投影 replace/category/split/paste，码点切分和同容器插入；新段 ID 从单调分配器预留。revision 检查保证队列与已确认版本绑定，确认后无需重命名节点或重挂载编辑器；并发冲突停止，不猜测映射或自动覆盖。
+- 队列持有已确认 base、顺序事务与本地 view。一次仅发送队首，收到响应后以新 base 重放剩余事务，保留继续输入。EditableParagraph 的 sourceText 回执同步拆分左段；后端响应不重发聚焦命令。字段未保存草稿仍由段落组件保管，约 650ms 或 blur 入队。
+- TextEditRequest 新增可选 request_id；Project.text_receipt 保存最后一次请求、结果 revision 与 focus，与内容/历史原子落盘，不进入 Snapshot。相同请求/版本重放返回当前视图，不重复写内容/历史；请求体变化或后续历史改变使回执失效。由于严格串行，只需一个回执。原子内容仍由 DOCX 适配器执行，UI 不写 XML。
+- 失败阻断队尾，保留本地事务并允许继续输入；手动重试沿用原 request_id/revision。未知网络结果不自动重放。队列未排空时阻止导出、切换、格式与选择器变更；检查焦点和范围继续独立。下载本地文字读取画布中尚未入队的草稿和队列视图，包含全部段落。
+- Ctrl+Z/重做先保存当前草稿并等待队列，然后走统一历史。join/delete 仍等待队列及服务端并暂时锁定画布；复杂节点只读。队列不持久化到浏览器，刷新/关闭有未保存警告。新段临时字体/结构上下文为近似投影，确认后以服务端结果为准。

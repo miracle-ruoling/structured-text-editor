@@ -9,6 +9,31 @@ def edit(client, view, **operation):
     return client.post(f'/api/projects/{view["id"]}/text', json={'revision': view['revision'], **operation})
 
 
+def test_text_queue_receipt_survives_reload_and_does_not_duplicate_history(client):
+    view = client.post('/api/projects/blank').json()
+    assert view['text_queue_version'] == 1
+    next_id = f'p{view["next_paragraph"]}'
+    op = dict(action='split', id='p1', offset=1, draft='甲乙', request_id='lost-response')
+    changed = edit(client, view, **op).json()
+    assert changed['edit_focus'] == next_id
+    assert changed['next_paragraph'] == view['next_paragraph'] + 1
+    # Every API request loads the persisted project; replay also works after reload.
+    assert edit(client, view, **op).json() == changed
+    assert edit(client, view, **{**op, 'draft': '不同请求'}).status_code == 400
+    undone = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': changed['revision']}).json()
+    assert undone['blocks'] == view['blocks']
+    assert undone['next_paragraph'] == changed['next_paragraph']
+    assert edit(client, view, **op).status_code == 400
+    assert client.get(f'/api/projects/{view["id"]}').json() == undone
+
+
+def test_failed_queue_request_does_not_reserve_ids_or_write_receipt(client):
+    view = client.post('/api/projects/blank').json()
+    assert edit(client, view, action='split', id='p1', offset=999, request_id='bad').status_code == 400
+    assert client.get(f'/api/projects/{view["id"]}').json() == view
+    assert client.app.state.store.load(view['id']).text_receipt is None
+
+
 @pytest.mark.parametrize('action, extra, expected', [
     ('split', {'offset': 2}, ['新😀', '正文']),
     ('paste', {'offset': 2, 'end': 2, 'text': '甲\n乙'}, ['新😀甲', '乙正文']),

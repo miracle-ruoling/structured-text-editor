@@ -22,15 +22,18 @@ import type { TemplateDraft, Extraction } from './lib/templates';
 import { useTemplatePreview } from './lib/useTemplatePreview';
 import { caretOffset, pasteCaret } from './lib/textEditing';
 import type { TextOperation } from './lib/textEditing';
+import { TextQueue } from './lib/textQueue';
 
 const LAST_PROJECT = 'wenxu.last-project.v1';
 
 export default function App() {
   const [doc, setDoc] = useState<DocumentView | null>(null);
   const docRef = useRef<DocumentView | null>(null);
+  const textQueue = useRef<TextQueue | null>(null);
+  const [queueState, setQueueState] = useState<{ pending: boolean; error: Error | null }>({ pending: false, error: null });
   const [textStates, setTextStates] = useState<Record<string, { dirty: boolean; saving: boolean }>>({});
-  const textPending = Object.values(textStates).some(state => state.dirty || state.saving);
-  const textSaving = Object.values(textStates).some(state => state.saving);
+  const textPending = queueState.pending || Object.values(textStates).some(state => state.dirty || state.saving);
+  const textSaving = (queueState.pending && !queueState.error) || Object.values(textStates).some(state => state.saving);
   const textLock = useRef<Promise<unknown>>(Promise.resolve());
   const [editorFocus, setEditorFocus] = useState<{ id: string; offset: number; choose: boolean; token: number } | null>(null);
   const onTextState = useCallback((id: string, dirty: boolean, saving: boolean) => {
@@ -68,7 +71,7 @@ export default function App() {
   const acceptResolvedSelection = useCallback((expected: SelectionSession, next: SelectionSession) => {
     setSelectionSession(current => current === expected ? next : current);
   }, []);
-  const selection = useSelection(doc, selectionSession, rangeDirty, acceptResolvedSelection);
+  const selection = useSelection(doc, selectionSession, rangeDirty || textPending, acceptResolvedSelection);
   const { ids: matched, matching, error: selectionError } = selection;
   const selectorError = rangeError || (rangeDirty ? '段落编号尚未确认，请按回车或移开焦点完成。' : selectionError);
   // An empty range input is still an unfinished edit and must be protected from document switches.
@@ -361,9 +364,32 @@ export default function App() {
   }
 
   const editText = useCallback(async (operation: TextOperation) => {
+    const activeDoc = docRef.current;
+    if (!activeDoc || operationLock.current) return null;
+    if (activeDoc.text_queue_version === 1 && ['split', 'paste', 'replace', 'category'].includes(operation.action)) {
+      try {
+        if (!textQueue.current?.pending && textQueue.current?.view !== activeDoc) {
+          textQueue.current = new TextQueue(activeDoc, (value, op) => api.editText(value, op), (value, pending, error) => {
+            acceptDoc(value, false);
+            setQueueState({ pending, error });
+            if (!pending) setRecent(items => items.map(item => item.id === value.id ? { ...item, revision: value.revision, updated_at: value.updated_at } : item));
+          });
+        }
+        const value = textQueue.current!.enqueue(operation);
+        const id = value.edit_focus || operation.id;
+        if (operation.action === 'split' || operation.action === 'paste') {
+          setEditorFocus({ id, offset: operation.action === 'paste' ? pasteCaret(operation.text || '', operation.offset || 0) : 0,
+            choose: operation.action === 'split', token: performance.now() });
+        }
+        return { id, text: value.blocks.find(b => b.id === id)?.text || '', sourceText: value.blocks.find(b => b.id === operation.id)?.text };
+      } catch (error) { setMessage({ text: (error as Error).message, error: true }); return null; }
+    }
     const queued = textLock.current.then(async () => {
+      if (textQueue.current && !await textQueue.current.flush()) return null;
       const currentDoc = docRef.current;
       if (!currentDoc || operationLock.current) return null;
+      const lockCanvas = currentDoc.text_queue_version === 1;
+      if (lockCanvas) { operationLock.current = true; setBusy(true); }
       try {
         const index = currentDoc.blocks.findIndex(b => b.id === operation.id);
         const previous = currentDoc.blocks[index - 1];
@@ -379,6 +405,7 @@ export default function App() {
         const block = value.blocks.find(b => b.id === (value.edit_focus || operation.id));
         return { id: block?.id || operation.id, text: block?.text || '' };
       } catch (error) { setMessage({ text: (error as Error).message, error: true }); return null; }
+      finally { if (lockCanvas) { operationLock.current = false; setBusy(false); } }
     });
     textLock.current = queued;
     return queued;
@@ -386,6 +413,7 @@ export default function App() {
 
   const editorHistory = useCallback(async (direction: 'undo' | 'redo') => {
     await textLock.current;
+    if (textQueue.current && !await textQueue.current.flush()) return;
     const currentDoc = docRef.current;
     if (!currentDoc || operationLock.current) return;
     const active = document.activeElement as HTMLElement | null;
@@ -433,6 +461,16 @@ export default function App() {
         <button className="primary" disabled={busy || !doc || textPending} onClick={() => download('docx')}><Download size={15} />导出 Word</button>
       </div>
     </header>
+    {queueState.error && <div className="inline-edit-error" role="alert">后台保存已停止，本地编辑已保留：{queueState.error.message}
+      <button onClick={() => void textQueue.current?.retry()}>重试保存</button>
+      <button onClick={() => {
+        const value = docRef.current;
+        if (!value) return;
+        const text = value.blocks.map(block => document.getElementById(`block-${block.id}`)?.querySelector('.editable-text')?.textContent ?? block.text).join('\n');
+        const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+        const anchor = document.createElement('a'); anchor.href = url; anchor.download = `${value.name}-本地文字.txt`; anchor.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }}>下载本地文字</button></div>}
     {doc ? <div className="workspace">
       <Sidebar doc={doc} recent={recent}
         onOpen={id => guardSwitch(() => void run(async () => newDocument(await api.get(id))))}
