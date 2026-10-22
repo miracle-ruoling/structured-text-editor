@@ -369,11 +369,11 @@ export default function App() {
         const previous = currentDoc.blocks[index - 1];
         const offset = operation.action === 'paste' ? pasteCaret(operation.text || '', operation.offset || 0)
           : operation.action === 'join' ? [...(previous?.text || '')].length : 0;
-        const value = await api.editText(currentDoc, operation);
+        const value = await api.editText(currentDoc, operation, saved => acceptDoc(saved, false));
         acceptDoc(value, false);
         setRecent(items => items.map(item => item.id === value.id ? { ...item, revision: value.revision, updated_at: value.updated_at } : item));
         setMessage(null);
-        if (operation.action !== 'replace') {
+        if (operation.action !== 'replace' && operation.action !== 'category') {
           setEditorFocus({ id: value.edit_focus || operation.id, offset, choose: operation.action === 'split', token: Date.now() });
         }
         const block = value.blocks.find(b => b.id === (value.edit_focus || operation.id));

@@ -1,5 +1,6 @@
 import type { AnnotationPatch, BulkAnnotation, DocumentView, ExportReport, FormatPatch, Preview, RecentProject, RuleAction, RulePreview, Selector, SizeChange } from './types';
 import type { FormatTemplate, TemplateLibrary, TemplatePreview, ExtractionGroup } from './types';
+import { createTextEditSender } from './compatibleTextEdit';
 
 export class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -22,10 +23,15 @@ export async function request<T>(path: string, body?: unknown, form?: FormData, 
   return response.json();
 }
 
+const sendTextEdit = createTextEditSender(
+  (doc, operation) => request<DocumentView>(`/projects/${doc.id}/text`, { revision: doc.revision, ...operation }),
+  error => error instanceof ApiError && error.status === 422 && error.message.includes('draft: Extra inputs are not permitted'),
+);
+
 export const api = {
   blank: () => request<DocumentView>('/projects/blank', {}),
   enableText: (doc: DocumentView) => request<DocumentView>(`/projects/${doc.id}/enable-text`, { revision: doc.revision }),
-  editText: (doc: DocumentView, operation: import('./textEditing').TextOperation) => request<DocumentView>(`/projects/${doc.id}/text`, { revision: doc.revision, ...operation }),
+  editText: sendTextEdit,
   templates: () => request<TemplateLibrary>('/templates'),
   saveTemplate: (revision: number, template: FormatTemplate, id?: string) => request<TemplateLibrary>('/templates/save', { revision, template, id }),
   deleteTemplate: (revision: number, id: string, restore = false) => request<TemplateLibrary>(`/templates/${restore ? 'restore' : 'delete'}`, { revision, id }),

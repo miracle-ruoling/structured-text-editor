@@ -28,6 +28,9 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
   const [acting, setActing] = useState(false);
   const [failedPaste, setFailedPaste] = useState<TextOperation | null>(null);
   const failedPasteRef = useRef<TextOperation | null>(null);
+  const categoryPending = useRef<Promise<boolean> | null>(null);
+  const failedCategory = useRef<TextOperation | null>(null);
+  const categoryChosen = useRef(false);
   const actingRef = useRef(false);
   const focusedToken = useRef<number | undefined>(undefined);
 
@@ -55,12 +58,15 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
     if (busy || acting || editorFocus?.id !== block.id || !ref.current || focusedToken.current === editorFocus.token) return;
     focusText(ref.current, editorFocus.offset);
     focusedToken.current = editorFocus.token;
+    categoryChosen.current = !editorFocus.choose;
     setChooser(editorFocus.choose); setSelected(0);
   }, [editorFocus, block.id, busy, acting]);
   useEffect(() => () => { clearTimeout(timer.current); report.current(block.id, false, false); }, [block.id]);
 
   async function save(): Promise<boolean> {
     clearTimeout(timer.current);
+    if (categoryPending.current && !await categoryPending.current) return false;
+    if (failedCategory.current) return false;
     if (pending.current) return pending.current;
     if (draft.current === persisted.current) return true;
     pending.current = (async () => {
@@ -72,7 +78,7 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
         persisted.current = value;
       }
       return true;
-    })().finally(() => { pending.current = null; report.current(block.id, draft.current !== persisted.current || !!failedPasteRef.current, false); });
+    })().finally(() => { pending.current = null; report.current(block.id, hasUnsaved(), !!categoryPending.current); });
     return pending.current;
   }
   function schedule() {
@@ -81,13 +87,21 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
   }
   function changed() {
     draft.current = ref.current?.textContent || ''; setText(draft.current);
-    report.current(block.id, draft.current !== persisted.current, !!pending.current); schedule();
+    report.current(block.id, hasUnsaved(), !!pending.current || !!categoryPending.current); schedule();
+  }
+  function hasUnsaved() {
+    return draft.current !== persisted.current || !!failedPasteRef.current || !!categoryPending.current || !!failedCategory.current;
   }
   async function action(operation: TextOperation) {
     if (actingRef.current || composing.current) return;
     actingRef.current = true; setActing(true);
     try {
       clearTimeout(timer.current);
+      if (categoryPending.current) await categoryPending.current;
+      if (failedCategory.current) {
+        if (operation.action === 'paste') { failedPasteRef.current = operation; setFailedPaste(operation); }
+        return;
+      }
       const combined = operation.action === 'split' || operation.action === 'paste';
       const ready = combined ? (!pending.current || await pending.current) : await save();
       if (ready) {
@@ -108,12 +122,33 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
       } else if (operation.action === 'paste') {
         failedPasteRef.current = operation; setFailedPaste(operation);
       }
-    } finally { actingRef.current = false; setActing(false); report.current(block.id, draft.current !== persisted.current || !!failedPasteRef.current, false); }
+    } finally { actingRef.current = false; setActing(false); report.current(block.id, hasUnsaved(), !!categoryPending.current); }
+  }
+  function applyCategory(operation: TextOperation) {
+    if (categoryPending.current) return;
+    failedCategory.current = null; setError('');
+    report.current(block.id, true, true);
+    categoryPending.current = latest.current(operation).then(result => {
+      if (!result) {
+        failedCategory.current = operation;
+        setError('类别保存失败，输入文字已保留，请重试保存。');
+      }
+      return !!result;
+    }).finally(() => {
+      categoryPending.current = null;
+      report.current(block.id, hasUnsaved(), !!pending.current);
+      if (!failedCategory.current && !actingRef.current && draft.current !== persisted.current) schedule();
+    });
   }
   function category(index: number) {
+    if (actingRef.current || categoryPending.current) return;
     setSelected(index);
+    setChooser(false); categoryChosen.current = true;
+    digitInput.current = { value: '', time: 0 };
     const choice = paragraphChoices[index];
-    void action({ action: 'category', id: block.id, role: choice.role, level: choice.level });
+    // Newly created paragraphs already have the default body category and format.
+    if (choice.role === 'body' && block.role === 'body') return;
+    applyCategory({ action: 'category', id: block.id, role: choice.role, level: choice.level });
   }
   return <div className="inline-writing" onClick={event => event.stopPropagation()} onKeyDown={event => event.stopPropagation()}>
     <div ref={ref} className="paragraph-text editable-text" role="textbox" aria-label={`${block.id.toUpperCase()} 文字编辑`} aria-multiline="true"
@@ -124,7 +159,7 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
         textAlign: block.format.alignment === 'both' ? 'justify' : block.format.alignment as 'left' | 'center' | 'right',
         fontFamily: [block.format.font_east_asia, block.format.font_latin, 'serif'].filter(Boolean).join(','),
         lineHeight: block.format.line_spacing || 1.6 }}
-      onFocus={() => { if (!draft.current && !chooser) { setChooser(true); setSelected(0); } }}
+      onFocus={() => { if (!draft.current && !chooser && !categoryChosen.current) { setChooser(true); setSelected(0); } }}
       onBlur={() => { setChooser(false); if (!composing.current && !actingRef.current) void save(); }}
       onInput={changed} onCompositionStart={() => { composing.current = true; setChooser(false); }}
       onCompositionEnd={() => { composing.current = false; changed(); }}
@@ -185,7 +220,7 @@ export const EditableParagraph = memo(function EditableParagraph({ block, busy, 
       {paragraphChoices.map((choice, index) => <button key={choice.label} type="button" tabIndex={-1} aria-pressed={selected === index}
         className={selected === index ? 'selected' : ''} disabled={busy || acting} onClick={() => category(index)}>{index + 1}.{choice.label}</button>)}
     </div>}
-    {error && <div className="inline-edit-error" role="alert">{error}<button onClick={() => failedPaste ? void action(failedPaste) : void save()}>重试保存</button><button onClick={() => {
+    {error && <div className="inline-edit-error" role="alert">{error}<button onClick={() => failedCategory.current ? applyCategory(failedCategory.current) : failedPaste ? void action(failedPaste) : void save()}>重试保存</button><button onClick={() => {
       const url = URL.createObjectURL(new Blob([failedPaste?.text ?? text], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href = url; a.download = `${block.id}-本地输入.txt`; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
     }}>下载本地文字</button>{failedPaste && <button onClick={() => {
       if (!window.confirm('放弃本次未成功的粘贴？已保存正文不会改变。')) return;
