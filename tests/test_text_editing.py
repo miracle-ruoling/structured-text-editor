@@ -9,6 +9,56 @@ def edit(client, view, **operation):
     return client.post(f'/api/projects/{view["id"]}/text', json={'revision': view['revision'], **operation})
 
 
+@pytest.mark.parametrize('action, extra, expected', [
+    ('split', {'offset': 2}, ['新😀', '正文']),
+    ('paste', {'offset': 2, 'end': 2, 'text': '甲\n乙'}, ['新😀甲', '乙正文']),
+])
+def test_draft_and_structure_commit_together(client, action, extra, expected):
+    view = client.post('/api/projects/blank').json()
+    changed = edit(client, view, action=action, id='p1', draft='新😀正文', **extra).json()
+    assert [b['text'] for b in changed['blocks']] == expected
+    assert changed['revision'] == view['revision'] + 1
+    undone = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': changed['revision']}).json()
+    assert undone['blocks'] == view['blocks']
+    redone = client.post(f'/api/projects/{view["id"]}/redo', json={'revision': undone['revision']}).json()
+    assert redone['blocks'] == changed['blocks']
+
+
+@pytest.mark.parametrize('operation', [
+    {'action': 'split', 'offset': 999, 'draft': '未保存'},
+    {'action': 'paste', 'offset': 0, 'end': 0, 'text': '\n' * 20000, 'draft': '未保存'},
+    {'action': 'split', 'offset': 0, 'draft': '\x00'},
+    {'action': 'category', 'role': 'title', 'draft': '未保存'},
+])
+def test_combined_draft_failure_does_not_persist(client, operation):
+    view = client.post('/api/projects/blank').json()
+    assert edit(client, view, id='p1', **operation).status_code in (400, 422)
+    assert client.get(f'/api/projects/{view["id"]}').json() == view
+
+
+def test_cached_projection_matches_fresh_and_is_not_mutated(client, rich_source):
+    from structured_editor.docx.editing import editable_view
+    from structured_editor.domain.rules import resolve
+    store = client.app.state.store
+    view = client.post('/api/projects/import', files={'file': ('cache.docx', rich_source)}).json()
+    view = client.post(f'/api/projects/{view["id"]}/enable-text', json={'revision': view['revision']}).json()
+    def check(current):
+        project = store.load(current['id'])
+        cached = store.base_view(project)
+        fresh = editable_view(store.source(project.id), project)
+        assert cached == fresh
+        assert resolve(cached, project, copy_view=False) == resolve(fresh, project)
+        assert store.base_view(project) == fresh
+    check(view)
+    changed = edit(client, view, action='paste', id='p1', offset=0, end=0, text='甲\n乙').json()
+    check(changed)
+    blank = client.post('/api/projects/blank').json()
+    check(blank)  # A different source must not reuse the previous document's style cache.
+    check(changed)
+    undone = client.post(f'/api/projects/{view["id"]}/undo', json={'revision': changed['revision']}).json()
+    check(undone)
+
+
 def test_paste_paragraphs_atomic_history_stable_ids_and_roundtrip(client):
     view = client.post('/api/projects/blank').json()
     view = edit(client, view, action='replace', id='p1', text='前😀选中尾\n软换行').json()

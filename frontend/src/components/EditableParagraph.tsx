@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import type { Block } from '../lib/types';
 import { caretOffset, chooserKey, focusText, paragraphChoices, selectedTextRange } from '../lib/textEditing';
 import type { TextOperation } from '../lib/textEditing';
@@ -11,7 +11,7 @@ export type TextEditorProps = {
   onHistory: (direction: 'undo' | 'redo') => Promise<void>;
 };
 
-export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocus, onHistory }: TextEditorProps & { block: Block; busy: boolean }) {
+export const EditableParagraph = memo(function EditableParagraph({ block, busy, onEdit, onTextState, editorFocus, onHistory }: TextEditorProps & { block: Block; busy: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [text, setText] = useState(block.text);
   const draft = useRef(block.text);
@@ -32,7 +32,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
   const focusedToken = useRef<number | undefined>(undefined);
 
   useEffect(() => {
-    if (draft.current !== persisted.current || pending.current) return;
+    if (acting || draft.current !== persisted.current || pending.current) return;
     const element = ref.current;
     const focused = element === document.activeElement;
     const offset = element && focused ? caretOffset(element) : 0;
@@ -50,7 +50,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
       } else element.textContent = block.text;
       if (focused) focusText(element, offset);
     }
-  }, [block.text, block.runs]);
+  }, [block.text, block.runs, acting]);
   useEffect(() => {
     if (busy || acting || editorFocus?.id !== block.id || !ref.current || focusedToken.current === editorFocus.token) return;
     focusText(ref.current, editorFocus.offset);
@@ -87,10 +87,18 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
     if (actingRef.current || composing.current) return;
     actingRef.current = true; setActing(true);
     try {
-      if (await save()) {
+      clearTimeout(timer.current);
+      const combined = operation.action === 'split' || operation.action === 'paste';
+      const ready = combined ? (!pending.current || await pending.current) : await save();
+      if (ready) {
+        if (combined && draft.current !== persisted.current) operation = { ...operation, draft: draft.current };
         report.current(block.id, true, true);
         const result = await latest.current(operation);
         if (result) {
+          if (combined) {
+            persisted.current = draft.current;
+            if (result.id === block.id) draft.current = persisted.current = result.text;
+          }
           setChooser(false); setError('');
           failedPasteRef.current = null; setFailedPaste(null);
         } else if (operation.action === 'paste') {
@@ -117,7 +125,7 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
         fontFamily: [block.format.font_east_asia, block.format.font_latin, 'serif'].filter(Boolean).join(','),
         lineHeight: block.format.line_spacing || 1.6 }}
       onFocus={() => { if (!draft.current && !chooser) { setChooser(true); setSelected(0); } }}
-      onBlur={() => { setChooser(false); if (!composing.current) void save(); }}
+      onBlur={() => { setChooser(false); if (!composing.current && !actingRef.current) void save(); }}
       onInput={changed} onCompositionStart={() => { composing.current = true; setChooser(false); }}
       onCompositionEnd={() => { composing.current = false; changed(); }}
       onPaste={event => {
@@ -126,6 +134,14 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
         const value = event.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
         const range = selectedTextRange(ref.current!);
         if (!range) { setError('暂不支持跨段粘贴替换，请在一个段落内选择插入位置。'); return; }
+        if (value && !value.includes('\n')) {
+          const selection = window.getSelection()!;
+          const domRange = selection.getRangeAt(0);
+          domRange.deleteContents();
+          const node = document.createTextNode(value); domRange.insertNode(node);
+          domRange.setStartAfter(node); domRange.collapse(true);
+          selection.removeAllRanges(); selection.addRange(domRange); changed(); return;
+        }
         if (value) void action({ action: 'paste', id: block.id, text: value, ...range });
       }}
       onKeyDown={event => {
@@ -177,4 +193,4 @@ export function EditableParagraph({ block, busy, onEdit, onTextState, editorFocu
       report.current(block.id, draft.current !== persisted.current, false);
     }}>放弃粘贴</button>}</div>}
   </div>;
-}
+});

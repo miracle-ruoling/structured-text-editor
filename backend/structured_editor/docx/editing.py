@@ -196,7 +196,7 @@ def edit_document(source, project, operation: TextEditRequest):
     paragraph = package.by_id.get(operation.id)
     if paragraph is None or not text_editable(paragraph):
         raise ValueError('该段含受保护结构，暂不可修改文字')
-    text = paragraph_text(paragraph)
+    text = operation.draft if operation.draft is not None else paragraph_text(paragraph)
     if operation.action == 'paste':
         if operation.end > len(text):
             raise ValueError('粘贴选区超出段落')
@@ -221,6 +221,8 @@ def edit_document(source, project, operation: TextEditRequest):
         package.by_id[operation.id] = paragraph
         package.ids[paragraph] = operation.id
         annotation.sizes = None
+    if operation.draft is not None:
+        replace_text(paragraph, operation.draft)
     focus = operation.id
     if operation.action == 'replace':
         replace_text(paragraph, operation.text)
@@ -304,9 +306,9 @@ def edit_document(source, project, operation: TextEditRequest):
     return focus
 
 
-def editable_view(source, project):
+def editable_view(source, project, paragraph_cache=None):
     package = package_for(source, project.content)
-    view = project_document(package)
+    view = project_document(package, paragraph_cache)
     for block in view['blocks']:
         block['text_editable'] = project.text_editing and text_editable(package.by_id[block['id']])
     return view

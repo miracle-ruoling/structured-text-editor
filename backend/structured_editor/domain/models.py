@@ -221,11 +221,14 @@ class TextEditRequest(Model):
     text: str | None = Field(default=None, max_length=100000)
     offset: int | None = Field(default=None, ge=0)
     end: int | None = Field(default=None, ge=0)
+    draft: str | None = Field(default=None, max_length=100000)
     role: Role = "body"
     level: int | None = Field(default=None, ge=1, le=3)
 
     @model_validator(mode="after")
     def valid_edit(self):
+        if self.draft is not None and self.action not in ('split', 'paste'):
+            raise ValueError("仅拆分和粘贴可携带待保存文字")
         if self.action == "replace" and self.text is None:
             raise ValueError("缺少正文")
         if self.action == "split" and self.offset is None:
@@ -234,8 +237,8 @@ class TextEditRequest(Model):
             raise ValueError("粘贴需要文字及有效的段内选区")
         if (self.role == "heading") != (self.level is not None):
             raise ValueError("小标题需指定级别，其他类别不能设置小标题级别")
-        if self.text is not None and any(not (c in "\n\t" or 0x20 <= ord(c) <= 0xD7FF
-                or 0xE000 <= ord(c) <= 0xFFFD or 0x10000 <= ord(c) <= 0x10FFFF) for c in self.text):
+        if any(not (c in "\n\t" or 0x20 <= ord(c) <= 0xD7FF
+                or 0xE000 <= ord(c) <= 0xFFFD or 0x10000 <= ord(c) <= 0x10FFFF) for c in (self.text or '') + (self.draft or '')):
             raise ValueError("正文包含不支持的控制字符")
         return self
 

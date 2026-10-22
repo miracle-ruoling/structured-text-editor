@@ -1,3 +1,7 @@
+from copy import deepcopy
+
+from lxml import etree
+
 from .package import DocxPackage
 from .styles import StyleResolver
 from .xml import NS, own_runs, q, run_text, value
@@ -16,7 +20,7 @@ def is_editable(paragraph):
     )
 
 
-def project_document(package: DocxPackage) -> dict:
+def project_document(package: DocxPackage, paragraph_cache=None) -> dict:
     styles = StyleResolver(package.styles, package.theme, package.settings, package.numbering)
     blocks, warnings = [], []
     section_ids, sections = physical_sections(package)
@@ -24,7 +28,15 @@ def project_document(package: DocxPackage) -> dict:
         # Text boxes are preserved, but not represented twice inside their host paragraph.
         if any(a.tag == q("txbxContent") for a in paragraph.iterancestors()):
             continue
-        fmt, sources, runs, mixed, sid, sname, role, reason, metadata = styles.paragraph(paragraph)
+        key = etree.tostring(paragraph) if paragraph_cache is not None else None
+        resolved = paragraph_cache.get(key) if paragraph_cache is not None else None
+        if resolved is None:
+            resolved = styles.paragraph(paragraph)
+            if paragraph_cache is not None:
+                if len(paragraph_cache) >= 20000:
+                    paragraph_cache.clear()
+                paragraph_cache[key] = resolved
+        fmt, sources, runs, mixed, sid, sname, role, reason, metadata = deepcopy(resolved) if paragraph_cache is not None else resolved
         text = "".join(run_text(run) for run in own_runs(paragraph))
         in_table = any(a.tag == q("tc") for a in paragraph.iterancestors())
         features = []

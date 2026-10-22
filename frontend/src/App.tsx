@@ -81,9 +81,17 @@ export default function App() {
     tab === 'templates' && !busy && !textPending && templatePreviewEnabled && (templateScope === 'all' || templateScopeReady));
   const clearFormatDraft = useCallback(() => { setFormatDraft(emptyFormatDraft()); }, []);
 
-  const acceptDoc = useCallback((value: DocumentView) => {
+  const acceptDoc = useCallback((value: DocumentView, refreshRecent = true) => {
+    const previous = docRef.current;
+    if (previous?.id === value.id) {
+      const old = new Map(previous.blocks.map(block => [block.id, block]));
+      value = { ...value, blocks: value.blocks.map(block => {
+        const existing = old.get(block.id);
+        return existing && JSON.stringify(existing) === JSON.stringify(block) ? existing : block;
+      }) };
+    }
     docRef.current = value; setDoc(value); setReport(null);
-    void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
+    if (refreshRecent) void api.recent().then(setRecent).catch(() => { /* Listing failure does not discard the current document. */ });
     try { localStorage.setItem(LAST_PROJECT, value.id); } catch { /* Content is stored by the local service. */ }
   }, []);
 
@@ -362,7 +370,8 @@ export default function App() {
         const offset = operation.action === 'paste' ? pasteCaret(operation.text || '', operation.offset || 0)
           : operation.action === 'join' ? [...(previous?.text || '')].length : 0;
         const value = await api.editText(currentDoc, operation);
-        acceptDoc(value);
+        acceptDoc(value, false);
+        setRecent(items => items.map(item => item.id === value.id ? { ...item, revision: value.revision, updated_at: value.updated_at } : item));
         setMessage(null);
         if (operation.action !== 'replace') {
           setEditorFocus({ id: value.edit_focus || operation.id, offset, choose: operation.action === 'split', token: Date.now() });
@@ -429,18 +438,18 @@ export default function App() {
         onOpen={id => guardSwitch(() => void run(async () => newDocument(await api.get(id))))}
         selector={selectionActive ? selector : null} onSelect={value => changeSelector(value, true)}
         onDeleteSelector={deleteSavedSelector}
-        onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy || textPending} />
+        onDemo={() => guardSwitch(() => void run(async () => newDocument(await api.demo())))} disabled={busy} textPending={textPending} />
       <DocumentCanvas preventHide={textPending} key={doc.id} textEditor={{ onEdit: editText, onTextState, editorFocus, onHistory: editorHistory }} doc={doc} matched={tab === 'templates' ? [] : matched} current={current} busy={busy} focusMuted={selectionActive && !selectionSession.direct}
         onPick={pickParagraph} onInspect={pickObject} onAddCondition={id => pickParagraph(id, true)} onFormat={formatObject} preview={tab === 'templates' ? templateLive.preview : preview} patch={{}} livePreview={true} previewPending={tab === 'templates' ? templateLive.pending : live.pending} previewError={tab === 'templates' ? templateLive.error : live.error} compare={compare} onCompare={() => setCompare(!compare)} onExitPreview={() => { if (tab === 'templates') setTemplatePreviewEnabled(false); else clearFormatDraft(); }}
         showTags={showTags} onShowTags={() => setShowTags(!showTags)} onlyMatches={tab !== 'templates' && onlyMatches}
         onOnlyMatches={() => { if (!textPending) setOnlyMatches(!onlyMatches); }} zoom={zoom} onZoom={setZoom} selectionActive={tab !== 'templates' && selectionActive} />
-      <aside className="inspector">
+      <aside className="inspector" inert={textPending} aria-busy={textPending}>
         <div className="inspector-tabs" role="tablist" aria-label="工作面板">
           <button disabled={busy} role="tab" aria-selected={tab === 'batch'} className={tab === 'batch' ? 'active' : ''} onClick={() => changePanel('batch')}><SlidersHorizontal size={15} />操作</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'object'} className={tab === 'object' ? 'active' : ''} onClick={() => changePanel('object')}><Fingerprint size={15} />对象属性</button>
           <button disabled={busy} role="tab" aria-selected={tab === 'templates'} className={tab === 'templates' ? 'active' : ''} onClick={() => changePanel('templates')}><Layers size={15} />模板</button>
         </div>
-        <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy || textPending}>
+        <div className="inspector-scroll">{tab === 'batch' ? <fieldset className="batch-fieldset" disabled={busy}>
           <SelectorBuilder value={selector} onChange={value => changeSelector(value)} tags={allTags} count={matched.length} chapters={doc.chapters} sections={doc.sections}
             rangeInputs={rangeInputs} onRangeDraft={updateRangeDraft} onRangeCommit={commitRange}
             error={selectorError} direct={selectionSession.direct} saveName={saveName} onSaveName={setSaveName} onSave={() => void saveCurrentSelector()} savedCount={doc.saved_selectors.length}
@@ -453,7 +462,7 @@ export default function App() {
             busy={busy} count={matched.length} ready={live.ready} pending={live.pending} error={live.error}
             selectionActive={selectionActive} blocks={doc.blocks} matched={matched}
             onRetry={() => { if (live.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else live.retry(); }} />
-        </fieldset> : tab === 'templates' ? <TemplatePanel doc={doc} library={library} draft={template} extraction={extraction} busy={busy || textPending}
+        </fieldset> : tab === 'templates' ? <TemplatePanel doc={doc} library={library} draft={template} extraction={extraction} busy={busy}
           dirty={templateDirty(template, library?.items || [])} preview={templateLive.preview} ready={templateLive.ready} pending={templateLive.pending} error={templateLive.error}
           scope={templateScope} scopeReady={templateScopeReady} scopeCount={matched.length} onScope={value => { setTemplateScope(value); setTemplatePreviewEnabled(true); }}
           previewEnabled={templatePreviewEnabled} onPreviewToggle={() => setTemplatePreviewEnabled(value => !value)}
@@ -461,7 +470,7 @@ export default function App() {
           onRetry={() => { if (templateLive.conflict) void run(async () => acceptDoc(await api.get(doc.id))); else templateLive.retry(); }}
           onChange={value => { setTemplate(value); setTemplatePreviewEnabled(true); }} onExtract={extractTemplate} onExtraction={setExtraction} onAdopt={adoptExtraction}
           onSave={saveTemplate} onDelete={deleteTemplate} onImport={importTemplate} onApply={applyTemplate}
-        /> : <ObjectInspector block={currentBlock} busy={busy || textPending} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
+        /> : <ObjectInspector block={currentBlock} busy={busy} onFormat={formatObject} onClearOverrides={clearOverrides} chapters={doc.chapters} sections={doc.sections} />}</div>
       </aside>
     </div> : <main className="loading-screen">{busy ? <><LoaderCircle className="spin" size={32} /><h2>正在打开文档工作台</h2></> : <><FileInput size={36} /><h2>打开你的第一份文档</h2><p>导入 Word 文件，或从内置示例开始。</p><button className="primary" onClick={() => void run(async () => newDocument(await api.demo()))}>打开示例</button></>}</main>}
     <footer className="status-bar">

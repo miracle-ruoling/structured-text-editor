@@ -28,8 +28,8 @@ def overlay(block: dict, patch: dict, label: str):
         run["format"].update({k: v for k, v in patch.items() if k in FONT_KEYS})
 
 
-def resolve(original: dict, project: Project) -> dict:
-    view = deepcopy(original)
+def resolve(original: dict, project: Project, *, copy_view=True) -> dict:
+    view = deepcopy(original) if copy_view else original
     stats = {rule.id: {"matched_count": 0, "effective_count": 0} for rule in project.rules}
     for block in view["blocks"]:
         annotation = project.annotations.get(block["id"])

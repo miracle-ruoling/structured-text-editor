@@ -105,7 +105,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.post("/api/projects/{identity}/text")
     def edit_text(identity: str, operation: TextEditRequest):
         with store.lock:
-            return store.edit_text(store.load(identity), operation)
+            # The projection already contains JSON primitives; avoid recursively re-encoding
+            # every format trace through FastAPI's generic object encoder on each keystroke.
+            return JSONResponse(store.edit_text(store.load(identity), operation))
 
     @app.post("/api/projects/import")
     def import_file(file: UploadFile = File(...)):

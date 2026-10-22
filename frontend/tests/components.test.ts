@@ -17,6 +17,16 @@ const ui = createRequire(import.meta.url)(bundle);
 after(() => { rmSync(temporary, { recursive: true }); });
 const render = (component: unknown, props: object) => ui.renderToStaticMarkup(ui.createElement(component, props));
 const noop = () => {};
+
+test('保存文字时侧栏隔离交互，但不切换按钮的灰色禁用样式', () => {
+  const props = { doc: { id: 'doc', name: '测试.docx', blocks: [], chapters: [], saved_selectors: [] }, recent: [], selector: null, disabled: false };
+  const idle = render(ui.Sidebar, props);
+  const saving = render(ui.Sidebar, { ...props, textPending: true });
+  assert.match(saving, /inert=""/);
+  assert.match(saving, /aria-busy="true"/);
+  assert.doesNotMatch(saving, /disabled=""/);
+  assert.equal(saving.replace(' inert="" aria-busy="true"', ''), idle);
+});
 const paragraph: Block = { id: 'p3', kind: 'paragraph', text: '混合字号', role: 'body', tags: [], in_table: false, editable: true, confirmed: false, style_id: '', style_name: '正文', role_source: '自动识别', format: { size_pt: 18 }, format_sources: { size_pt: '规则：正文' }, mixed: [], features: [], overrides: {}, format_trace: {}, runs: [{ text: '混合', format: { size_pt: 18 } }, { text: '字号', format: { size_pt: 18 } }] };
 const draft: FormatRule = { id: 'a'.repeat(32), name: '正文', selector: { mode: 'all', conditions: [] }, patch: { size_pt: 18, first_line_chars: 2 }, enabled: true };
 

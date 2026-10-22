@@ -7,7 +7,7 @@ export const paragraphChoices: { label: string; role: Role; level?: number }[] =
   { label: '引用', role: 'quote' }, { label: '代码', role: 'code' }, { label: '列表', role: 'list' },
   { label: '参考文献', role: 'reference' }, { label: '未分类', role: 'unclassified' },
 ];
-export type TextOperation = { action: 'replace' | 'split' | 'join' | 'delete' | 'category' | 'paste'; id: string; text?: string; offset?: number; end?: number; role?: Role; level?: number };
+export type TextOperation = { action: 'replace' | 'split' | 'join' | 'delete' | 'category' | 'paste'; id: string; text?: string; draft?: string; offset?: number; end?: number; role?: Role; level?: number };
 
 export function pasteCaret(text: string, offset: number) {
   const lines = text.split('\n');

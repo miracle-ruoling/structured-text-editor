@@ -53,6 +53,8 @@ class ProjectStore:
         self.root = root
         root.mkdir(parents=True, exist_ok=True)
         self.lock = RLock()
+        self._editing_source = None
+        self._paragraph_cache = {}
 
     def folder(self, identity: str) -> Path:
         if not re.fullmatch(r"[0-9a-f]{32}", identity):
@@ -242,7 +244,7 @@ class ProjectStore:
         return project
 
     def view(self, project: Project) -> dict:
-        view = resolve(self.base_view(project), project)
+        view = resolve(self.base_view(project), project, copy_view=not project.text_editing)
         return {
             **view,
             "id": project.id,
@@ -258,7 +260,14 @@ class ProjectStore:
         }
 
     def base_view(self, project):
-        return editable_view(self.source(project.id), project) if project.text_editing else self.original_view(project.id)
+        if not project.text_editing:
+            return self.original_view(project.id)
+        source = self.source(project.id)
+        # Cache only one immutable source package; different style/theme definitions never share entries.
+        if source != self._editing_source:
+            self._editing_source = source
+            self._paragraph_cache = {}
+        return editable_view(source, project, self._paragraph_cache)
 
     def enable_text(self, project, revision):
         check_revision(project, revision)

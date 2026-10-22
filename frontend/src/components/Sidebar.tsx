@@ -4,7 +4,7 @@ import { bodySelector, roles } from '../lib/types';
 import { selectorSignature } from '../lib/selection';
 import { useState } from 'react';
 
-type Props = { doc: DocumentView; recent: RecentProject[]; onOpen: (id: string) => void; selector: Selector | null; onSelect: (selector: Selector) => void; onDemo: () => void; disabled: boolean; onDeleteSelector: (id: string) => void };
+type Props = { doc: DocumentView; recent: RecentProject[]; onOpen: (id: string) => void; selector: Selector | null; onSelect: (selector: Selector) => void; onDemo: () => void; disabled: boolean; textPending?: boolean; onDeleteSelector: (id: string) => void };
 const presets = [
   { name: '全部内容', icon: Layers3, selector: { mode: 'all', conditions: [] } as Selector },
   { name: '正文 · 排除例外', icon: FileText, selector: bodySelector },
@@ -13,9 +13,9 @@ const presets = [
   { name: '保留原格式', icon: ShieldCheck, selector: { mode: 'all', conditions: [{ field: 'tag', op: 'is', value: '保留原格式' }] } as Selector },
 ];
 
-export function Sidebar({ doc, recent, onOpen, selector, onSelect, onDemo, disabled, onDeleteSelector }: Props) {
+export function Sidebar({ doc, recent, onOpen, selector, onSelect, onDemo, disabled, textPending, onDeleteSelector }: Props) {
   const [chapterLimit, setChapterLimit] = useState(40);
-  return <aside className="sidebar">
+  return <aside className="sidebar" inert={textPending} aria-busy={textPending}>
     <div className="sidebar-label">当前文档</div>
     <div className="file-card"><div className="file-icon"><FileText size={19} /></div><div><strong title={doc.name}>{doc.name.replace(/\.docx$/i, '')}</strong><span>DOCX · {doc.blocks.length} 个段落</span></div></div>
     <select className="recent-projects" aria-label="打开最近文档" disabled={disabled} value="" onChange={e => { if (e.target.value) onOpen(e.target.value); }}><option value="">打开最近文档…</option>{recent.filter(p => p.id !== doc.id).map(project => <option key={project.id} value={project.id}>{project.name} · {new Date(project.updated_at).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })} · r{project.revision} · {project.id.slice(0, 6)}</option>)}</select>
