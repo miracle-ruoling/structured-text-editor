@@ -1,61 +1,47 @@
-# 文序项目交接
+# 最小交接：文序
 
-更新日期：2026-10-21  
-工作区：`C:\Users\20979\RP_Projects\structured_editor`  
-本文件保留 F2 交接背景；当前交付与提交请以 STATUS.md 和 git log -1 为准。
+更新：2026-10-22。工作区 `C:\Users\20979\RP_Projects\structured_editor`，Windows / PowerShell。
 
-## 当前状态
+## 恢复方式
 
-2026-10-21 已按 3A 反馈完成 3B 统一写作工作台，待验收。当前入口为同一工作台的新建文档/启用文字编辑；只读 AGENTS/STATUS 恢复，细节按需查 STAGE3B 和架构第 19 节。以下旧交接内容仅作历史背景。
+先读 `AGENTS.md`、精简后的 `docs/STATUS.md`。本文件提供下一阶段所需入口；读过或已粘贴进对话就不重复读。不要通读 PLAN、ARCHITECTURE、ISSUES、历史交接或旧 3A 文档；只检索当前任务对应章节。工具仅输出相关片段、测试摘要与失败详情，小任务不做全项目探索。
 
-最近界面调整：对象属性页只读显示类别、标签和类别来源；统一在操作页「标注」中编辑类别/标签。移除了选择器中的「点击换段 · Ctrl 点击切换段落」常驻说明。点选操作习惯不必常驻占用菜单空间，必要帮助优先放在悬浮/键盘聚焦提示中，不必要时不显示。对象检查不再要求丢弃或确认未完成的单段标签草稿；切换文档仍保护真正未提交的格式、模板、标注和筛选输入。
+## 当前产品与不可退回的决策
 
-## 产品目标与当前边界
+- React/TypeScript/Vite + Python/FastAPI/Pydantic/lxml。本机运行；同一三栏工作台兼容导入 DOCX 和新建写作，不恢复旧独立 Tiptap 界面。
+- 空文档可写；已有 DOCX 先点「启用文字编辑」。文字、格式、模板共用持久撤销/重做。编辑模式导出不做原文字未变审计；原 DOCX 与未修改部件始终保留。
+- 回车新段默认正文，旁边类别菜单支持数字/左右键选择、回车确认；确认正文立即收菜单，其他类别后台保存且不阻断输入。确认后数字是正文，重新聚焦不能重开已确认菜单。标记默认显示，可关闭。
+- 单行粘贴本地立即显示，约 650ms 停顿保存；多行粘贴建立独立正文段落。侧栏保存期间 inert 锁定但不闪灰。失败保留本地文字，可重试/下载；不得用旧响应覆盖继续输入或抢光标。
+- 类别、标签、结构上下文独立；检查焦点、筛选范围、格式提交范围独立。对象属性只读检查，标注入口在操作页。不要新增常驻操作教学。
 
-「文序」针对已有 Word 文档提供结构化阅读、可见类别/标签、组合筛选、范围格式修改及 DOCX 导出。用户希望明确控制文章各部分，不依赖 Word 隐式样式行为；对象类别是主要语义类，标签是自由标记，结构上下文独立。筛选组合用来限定操作对象，之后可以执行格式修改或标注。
+## 下一阶段边界
 
-当前是已有 DOCX 的工作台，不是完整写作编辑器。结构视图不保证复刻 Word 页面、分页或所有样式级联。原 DOCX 保留为内容来源，导出对原包定点修改；不覆盖原文件，不改动未选中段落。模板以段落为单位、按现有九类一次性应用。模板已获认可；多级标题/列表专属类别、完整内容编辑、复杂 Word 对象编辑、精确分页和桌面安装仍未实现。
+最新修复 `226cd0f` 已提交，尚无用户明确验收；用户已确认粘贴、回车打开类别菜单正常。本次仅整理交接，不代表授权开始实现下一阶段。后续若用户明确要求继续，则直接推进，不重复索要已给授权。
 
-## 重要交互决策
+当前最接近用户诉求的未完成项是：**新建段落/多段粘贴仍等待服务端，尚非完整本地即时编辑**。建议下一期先做本地结构事务及后台串行保存，明确临时 ID 到持久 ID、待保存操作顺序、失败保留/重试、焦点和统一历史，再扩展跨段选区。此为建议，未获用户选定；PLAN 阶段 3 仍列跨段选区、复杂节点/资源为后续方向，不一次包揽。
 
-- 对象属性页用于检查，不承担类别/标签编辑；操作页提供唯一标注入口。
-- 「标注」针对当前筛选的有效命中，操作可撤销；普通点选与 Ctrl/Meta 点选的语义在当前逻辑中持续可用，连续 Ctrl 点选合并同一选择，已选段可反选。
-- 直接选中与筛选范围、当前检查焦点、格式提交范围彼此独立，界面状态应避免混淆。
-- 常见交互不重复写在面板内；错误、实际未提交的输入和操作范围等必要信息仍应显示。
-- 可逆、意图明确的行为自动保存；只有确实会丢失未提交内容才拦截并要求决定。
-- 只有明确选择的格式属性写入；注意 Word 继承、单位、混合 run、显式关闭/零值及属性冲突。不通过改 Word 样式影响未选中对象。
-- 用户只审查最新修复/新增功能，不再要求用户重复执行历史回归清单；开发侧运行回归并简要记录。
+图片/公式/域/超链接/修订/分节等复杂段落继续只读，不降级纯文本；普通表格文字可编辑，但拆合不能跨单元格或复杂结构。真实 IME、Word 精确分页、长文档端到端性能未全面验收。阶段完成停下，不能把后续能力写成已完成。
 
-## 架构及恢复入口
+## 实施时只读这些入口
 
-技术栈：React + TypeScript + Vite 前端；Python + FastAPI + Pydantic + lxml 后端；DOCX OOXML 修改封装在后端适配器。领域层不依赖 FastAPI。Python 项目使用 uv 和 `.venv`，前端依赖位于 `frontend/node_modules`；均不入 Git。
+| 任务 | 文件 / 必要契约 |
+| --- | --- |
+| 编辑状态、串行请求、焦点 | `frontend/src/App.tsx`、`components/EditableParagraph.tsx`、`lib/textEditing.ts` |
+| 画布、稳定段落组件 | `frontend/src/components/DocumentCanvas.tsx` |
+| 旧服务兼容 | `frontend/src/lib/compatibleTextEdit.ts`、`lib/api.ts` |
+| 内容动作、保留、导出 | `backend/structured_editor/docx/editing.py` |
+| 项目、历史、原子存储 | `backend/structured_editor/domain/models.py`、`domain/commands.py`、`storage.py` |
+| 详细契约（仅相关节） | `docs/ARCHITECTURE.md` 第 19–22 节；多段粘贴查 `STAGE3C.md` |
 
-按需恢复（2026-10-21 更新；以最新用户任务和 STATUS 为准）：
+项目 v6：原 source.docx 不变，content 保存 XML + 稳定 pN ID；next_paragraph 单调递增，不随撤销回退。当前/历史内容与标注等一起恢复，50 步历史。拆分偏移按 Unicode 码点。XML 只在 DOCX 适配器处理，领域层不依赖 HTTP。
 
-1. `AGENTS.md`：协作、范围和 Git 约定。
-2. `docs/STATUS.md`：阶段状态、验证与已知限制。
-仅前两项必读。其他文档先检索标题，再读取任务相关章节：PLAN 对应分期；ARCHITECTURE 对应契约（模板为第 17 节）；ISSUES 对应反馈；STAGE_F2 仅在处理模板或迁移时读取。不要通读历史，也不必从本交接文档开始恢复。
+split/paste 可带 draft，将未保存正文和结构一次提交。仅当旧服务明确以 422 拒绝 draft 时，前端兼容为 replace + 结构请求，并保留中间成功 revision；网络错误/409 不能盲目重放。旧路径两步历史，新版单次历史。类别请求独立排队，后续结构动作必须等类别成功。
 
-近期具体交互可查 F1 点选反馈文档；如果路径已归档，按 STATUS 的说明查看 `docs/history/FEEDBACK_POINT_EDIT_*.md`。
+## 开发与验证
 
-代码入口：`frontend/src/App.tsx` 管理主状态和面板；`frontend/src/components/` 按功能拆分界面；`frontend/src/lib/selection.ts` 与相关 hooks 管理点选/选择器；格式、模板预览在对应的 `useFormatPreview`、`useTemplatePreview` 中；后端核心位于 `backend/structured_editor/domain/`，DOCX 包读取与写入位于 `backend/structured_editor/docx/`，持久化与模板库分别在 storage 和 template_store 附近。
-
-## 最近验证与限制
-
-最近提交 `5445a88` 验证通过：前端 40 项测试、后端 114 项测试、Ruff 检查、TypeScript/Vite 生产构建。唯一已知测试输出为 Starlette TestClient/httpx 弃用提示，不影响测试。没有后端逻辑、项目 schema 或依赖变更。
-
-没有对最近界面做浏览器点击或视觉验收。之前浏览器访问本机地址和服务重启操作曾受运行环境权限限制；不要声称已做在线视觉检查，也不要绕过权限边界。若需要更新正在运行的后端，按 STATUS 重新确认服务状态和进程，不复用旧 PID；必要时运行根目录 `Start.cmd`。当前服务是否运行未知。
-
-## Git 与文件约定
-
-不修改 `../copyQ`，它仅作参考。不要推送远程。不要提交 `data/`、原始用户文档、虚拟环境、`node_modules`、构建输出、临时日志或 `.artifacts/`。已保存提交不改写（不 amend）。里程碑提交标题简明，正文说明行为边界和验证结果。
-
-最近提交：
-
-- `5445a88` 收敛标注入口与对象检查界面
-- `8c2332f` 完成 F2：类别模板与全局模板库，冻结旧规则及历史
-- `a4ea9fb` 修正点选浮窗裁切与高级条件行跳变
-
-## 下一对话建议
-
-先读 AGENTS 与 STATUS，其他资料按任务读取相关章节。用户已明确授权下一阶段时直接继续，不重复确认；先把目标分解、更新计划文档，再实施到可检查的阶段交付，并在阶段结束停下。本文的旧暂停记录不覆盖新的授权与当前 STATUS。
+- 根目录：`.venv/Scripts/python.exe -m pytest -q`；`.venv/Scripts/ruff.exe check backend tests`。
+- `frontend` 目录：`npm.cmd run build`；`node --experimental-strip-types --test --test-reporter=dot tests/*.test.ts`。PowerShell 使用 npm.cmd。
+- 重点回归：`tests/test_text_editing.py`、`frontend/tests/textEditing.test.ts`、`compatibleTextEdit.test.ts`；按实际变更补保存失败、历史/ID、原文保留和选择器检查，浏览器只验本轮交互，不让用户重跑历史清单。
+- 隔离服务：`.venv/Scripts/python.exe -m structured_editor --port 8766 --data-dir .artifacts/<task> --no-browser`；不要用用户项目测试。停止前现查端口及进程命令行，不能复用旧 PID。
+- 用户服务通常 8765。最近只读 OpenAPI 确认其仍是旧后端，不支持 draft；现状可能变化，按需重新检查。刷新只更新前端；后端更新需重启 `Start.cmd`，不要无故停用户服务。
+- 修改后更新 STATUS/ISSUES 与真实限制；独立里程碑提交，不 amend、不 push。不修改 `../copyQ`，不提交 data、用户文档、依赖、构建或临时产物。环境问题只做一次针对性重试。
